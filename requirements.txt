@@ -19,4 +19,7 @@ Pillow
 # HTTP Requests
 requests
 
+# MCP Server
+mcp
+
 google-genai 
