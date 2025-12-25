@@ -1,0 +1,6 @@
+__pycache__/
+.env
+venv/
+test_files/
+plan.plan.md
+.DS_Store

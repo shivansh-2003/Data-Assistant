@@ -1,0 +1,21 @@
+# FastAPI Backend
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Streamlit Frontend
+streamlit
+
+# Data Processing
+pandas
+openpyxl
+xlrd
+chardet
+
+# Document Processing (Docling)
+docling
+Pillow
+
+# HTTP Requests
+requests
+
