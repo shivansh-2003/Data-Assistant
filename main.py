@@ -79,7 +79,7 @@ async def file_upload(
             raise HTTPException(status_code=413, 
                               detail=f"File size ({file_size / (1024 * 1024):.2f}MB) exceeds maximum ({max_mb}MB)")
         
-        if file_size < IngestionConfig.MIN_FILE_SIZE:
+        if file_size < 1:
             raise HTTPException(status_code=400, detail="File is empty or too small")
         
         IngestionConfig.ensure_temp_dir()
@@ -134,13 +134,7 @@ async def get_config():
     """
     return {
         "max_file_size_mb": IngestionConfig.MAX_FILE_SIZE / (1024 * 1024),
-        "supported_formats": {
-            "csv": IngestionConfig.CSV_EXTENSIONS,
-            "excel": IngestionConfig.EXCEL_EXTENSIONS,
-            "pdf": IngestionConfig.PDF_EXTENSIONS,
-            "image": IngestionConfig.IMAGE_EXTENSIONS
-        },
-        "docling_enabled": IngestionConfig.DOCLING_API_KEY != "",
+        "supported_formats": {k: list(v) for k, v in IngestionConfig.FILE_TYPES.items()},
         "max_tables_per_file": IngestionConfig.MAX_TABLES_PER_FILE
     }
 

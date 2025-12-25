@@ -106,13 +106,13 @@ def display_table_info(table_info: Dict, table_index: int):
             "Column": table_info['columns'],
             "Data Type": [table_info['dtypes'].get(col, 'unknown') for col in table_info['columns']]
         })
-        st.dataframe(col_df, use_container_width=True)
+        st.dataframe(col_df, width='stretch')
     
     # Display preview data
     if table_info.get('preview'):
         st.subheader("👀 Data Preview (First 10 rows)")
         preview_df = pd.DataFrame(table_info['preview'])
-        st.dataframe(preview_df, use_container_width=True, height=400)
+        st.dataframe(preview_df, width='stretch', height=400)
         
         # Download button for full data
         csv = preview_df.to_csv(index=False)
@@ -185,7 +185,7 @@ def main():
     if uploaded_file is not None:
         col1, col2 = st.columns([1, 4])
         with col1:
-            upload_button = st.button("🚀 Upload & Process", type="primary", use_container_width=True)
+            upload_button = st.button("🚀 Upload & Process", type="primary")
         
         if upload_button:
             with st.spinner("Uploading and processing file..."):

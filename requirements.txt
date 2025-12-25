@@ -19,3 +19,4 @@ Pillow
 # HTTP Requests
 requests
 
+google-genai 
