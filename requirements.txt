@@ -22,4 +22,7 @@ requests
 # MCP Server
 mcp
 
-google-genai 
+google-genai
+
+# Redis Backend
+redis 

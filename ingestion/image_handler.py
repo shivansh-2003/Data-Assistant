@@ -47,7 +47,7 @@ def extract_table_with_gemini(image_path: str) -> pd.DataFrame:
     text = response.text.strip()
     if text == "NO_TABLE":
         raise ValueError("No table detected in image")
-    
+
     # Remove markdown code block wrapper if present
     if text.startswith("```"):
         text = text[text.find("\n") + 1:] if "\n" in text else text[3:]
