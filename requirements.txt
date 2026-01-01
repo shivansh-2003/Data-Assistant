@@ -18,9 +18,19 @@ Pillow
 
 # HTTP Requests
 requests
+httpx
 
 # MCP Server
 mcp
+fastmcp
+
+# LangChain MCP Adapters
+langchain-mcp-adapters
+langchain
+langchain-openai
+
+# OpenAI (for GPT-5.1)
+openai
 
 google-genai
 
