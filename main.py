@@ -1,9 +1,10 @@
 """
 FastAPI application with endpoints for file ingestion and session management.
 Stores processed DataFrames in Upstash Redis with automatic TTL expiration.
+Now supports MCP server integration via HTTP API with full DataFrame serialization.
 """
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -11,7 +12,10 @@ import logging
 import os
 import uuid
 import time
-from typing import Optional
+import base64
+import pickle
+import pandas as pd
+from typing import Optional, Dict, Any
 
 from ingestion.ingestion_handler import process_file
 from ingestion.config import IngestionConfig
@@ -36,8 +40,8 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI app
 app = FastAPI(
     title="Data Analyst Platform - Ingestion API",
-    description="API for ingesting files and managing session data in Redis",
-    version="1.0.0"
+    description="API for ingesting files and managing session data in Redis with MCP server integration",
+    version="1.1.0"
 )
 
 # CORS middleware
@@ -55,7 +59,7 @@ async def root():
     """Root endpoint with API information."""
     return {
         "message": "Data Analyst Platform - Ingestion API",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "redis_connected": is_connected(),
         "endpoints": {
             "file_upload": "/api/ingestion/file-upload",
@@ -64,7 +68,13 @@ async def root():
             "session_tables": "GET /api/session/{session_id}/tables",
             "session_metadata": "GET /api/session/{session_id}/metadata",
             "session_delete": "DELETE /api/session/{session_id}",
-            "session_list": "GET /api/sessions"
+            "session_list": "GET /api/sessions",
+            "session_update": "PUT /api/session/{session_id}/tables"
+        },
+        "features": {
+            "mcp_integration": True,
+            "full_serialization": True,
+            "ttl_management": True
         }
     }
 
@@ -75,7 +85,8 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "ingestion-api",
-        "redis_connected": is_connected()
+        "redis_connected": is_connected(),
+        "version": "1.1.0"
     }
 
 
@@ -214,10 +225,16 @@ async def get_all_sessions():
 
 
 @app.get("/api/session/{session_id}/tables")
-async def get_session_tables(session_id: str):
+async def get_session_tables(
+    session_id: str, 
+    format: str = Query("summary", regex="^(summary|full)$")
+):
     """
     Get all tables from a session.
     Extends session TTL on access.
+    
+    Query Parameters:
+        format: "summary" (default) for table metadata, "full" for serialized DataFrames
     """
     try:
         tables = load_session(session_id)
@@ -228,22 +245,47 @@ async def get_session_tables(session_id: str):
         # Extend TTL on access
         extend_ttl(session_id)
         
-        response = {
-            "session_id": session_id,
-            "table_count": len(tables),
-            "tables": {}
-        }
-        
-        for name, df in tables.items():
-            response["tables"][name] = {
-                "row_count": len(df),
-                "column_count": len(df.columns),
-                "columns": list(df.columns),
-                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
-                "preview": df.head(10).to_dict(orient="records")
+        if format == "full":
+            # Return full serialized DataFrames for MCP integration
+            response = {
+                "session_id": session_id,
+                "table_count": len(tables),
+                "tables": []
             }
-        
-        return JSONResponse(content=response)
+            
+            for name, df in tables.items():
+                # Serialize DataFrame to base64-encoded pickle
+                pickle_bytes = pickle.dumps(df)
+                base64_data = base64.b64encode(pickle_bytes).decode('utf-8')
+                
+                response["tables"].append({
+                    "table_name": name,
+                    "data": base64_data,
+                    "row_count": len(df),
+                    "column_count": len(df.columns),
+                    "columns": list(df.columns),
+                    "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()}
+                })
+            
+            return JSONResponse(content=response)
+        else:
+            # Return summary format (default, backward compatible)
+            response = {
+                "session_id": session_id,
+                "table_count": len(tables),
+                "tables": {}
+            }
+            
+            for name, df in tables.items():
+                response["tables"][name] = {
+                    "row_count": len(df),
+                    "column_count": len(df.columns),
+                    "columns": list(df.columns),
+                    "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                    "preview": df.head(10).to_dict(orient="records")
+                }
+            
+            return JSONResponse(content=response)
         
     except HTTPException:
         raise
@@ -273,6 +315,99 @@ async def get_session_metadata(session_id: str):
         raise
     except Exception as e:
         logger.error(f"Error getting metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/session/{session_id}/tables")
+async def update_session_tables(
+    session_id: str,
+    request_data: dict
+):
+    """
+    Update tables in a session with serialized DataFrames.
+    Used by MCP server to save manipulated data back to Redis.
+    
+    Request Body:
+        {
+            "tables": {
+                "table_name": {
+                    "data": "base64_encoded_pickle_data",
+                    "row_count": 100,
+                    "column_count": 5,
+                    "columns": ["col1", "col2"],
+                    "dtypes": {"col1": "int64", "col2": "object"}
+                }
+            },
+            "metadata": {
+                "updated_at": 1234567890,
+                "updated_by": "mcp_server",
+                "operation_count": 5
+            }
+        }
+    """
+    try:
+        if not session_exists(session_id):
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        
+        tables_data = request_data.get("tables", {})
+        metadata_updates = request_data.get("metadata", {})
+        
+        if not tables_data:
+            raise HTTPException(status_code=400, detail="No tables provided in request")
+        
+        # Deserialize the tables from base64-encoded pickle
+        tables_dict = {}
+        for table_name, table_info in tables_data.items():
+            base64_data = table_info.get("data")
+            if not base64_data:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Missing data for table '{table_name}'"
+                )
+            
+            try:
+                # Decode base64 and unpickle DataFrame
+                pickle_bytes = base64.b64decode(base64_data.encode('utf-8'))
+                df = pickle.loads(pickle_bytes)
+                
+                if not isinstance(df, pd.DataFrame):
+                    raise ValueError(f"Deserialized data for table '{table_name}' is not a DataFrame")
+                
+                tables_dict[table_name] = df
+                
+            except Exception as e:
+                logger.error(f"Failed to deserialize table '{table_name}': {e}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to deserialize table '{table_name}': {str(e)}"
+                )
+        
+        # Get existing metadata and merge updates
+        existing_metadata = get_metadata(session_id) or {}
+        updated_metadata = {**existing_metadata, **metadata_updates}
+        updated_metadata["last_updated"] = time.time()
+        updated_metadata["updated_by"] = "mcp_server"
+        
+        # Save to Redis
+        if save_session(session_id, tables_dict, updated_metadata):
+            # Extend TTL on successful update
+            extend_ttl(session_id)
+            
+            logger.info(f"Successfully updated session {session_id} with {len(tables_dict)} tables")
+            return JSONResponse(content={
+                "success": True,
+                "message": f"Session '{session_id}' updated successfully",
+                "table_count": len(tables_dict),
+                "tables_updated": list(tables_dict.keys())
+            })
+        else:
+            logger.error(f"Failed to save session {session_id} to Redis")
+            raise HTTPException(status_code=500, detail="Failed to save session to Redis")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating session tables: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -334,5 +469,5 @@ async def get_config():
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 8001))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
