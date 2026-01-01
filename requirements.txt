@@ -12,6 +12,10 @@ openpyxl
 xlrd
 chardet
 
+# Visualization
+plotly
+kaleido  # For static image exports (PNG/SVG)
+
 # Document Processing (Docling)
 docling
 Pillow

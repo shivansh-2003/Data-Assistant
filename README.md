@@ -33,6 +33,7 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 - **Data Storage**: Upstash Redis (Cloud Redis)
 - **AI/ML**: LangChain, OpenAI GPT models
 - **Data Processing**: Pandas, Docling
+- **Visualization**: Plotly, Kaleido (for static exports)
 - **MCP Server**: FastMCP for tool-based operations
 
 ## 🏗 Architecture
@@ -40,12 +41,12 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Streamlit Frontend (app.py)              │
-│  ┌──────────────┐  ┌──────────────────────────────────┐   │
-│  │ Upload Tab   │  │ Data Manipulation Tab            │   │
-│  │ - File UI    │  │ - NL Query Input                 │   │
-│  │ - Preview    │  │ - Operation History              │   │
-│  └──────────────┘  │ - Data Preview                   │   │
-│                    └──────────────────────────────────┘   │
+│  ┌──────────────┐  ┌──────────────────┐  ┌──────────────┐ │
+│  │ Upload Tab   │  │ Data Manipulation│  │ Visualization│ │
+│  │ - File UI    │  │ - NL Query Input │  │ - Chart Types │ │
+│  │ - Preview    │  │ - Operation Hist │  │ - Interactive │ │
+│  └──────────────┘  │ - Data Preview   │  │ - Export      │ │
+│                    └──────────────────┘  └──────────────┘ │
 └───────────────────────────┬───────────────────────────────┘
                             │ HTTP Requests
 ┌───────────────────────────▼───────────────────────────────┐
@@ -95,13 +96,22 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 - **Real-time Preview**: See data changes immediately
 - **Session Persistence**: Data persists across page reloads
 
-### 3. Session Management
+### 3. Visualization Centre Tab
+- **Zero-Latency Charts**: Instant chart generation using Plotly
+- **8 Chart Types**: Bar, Line, Scatter, Area, Box, Histogram, Pie, Heatmap
+- **Interactive Visualizations**: Zoom, pan, hover tooltips
+- **Column Mapping**: Easy X/Y axis and color grouping selection
+- **Aggregations**: Sum, mean, count, min, max for grouped data
+- **One-Click Exports**: PNG, SVG, and interactive HTML formats
+- **Theme-Aware**: Automatically adapts to light/dark mode
+
+### 4. Session Management
 - **Automatic TTL**: Sessions expire after 30 minutes of inactivity
 - **TTL Extension**: Sessions auto-extend on access
 - **Metadata Tracking**: File names, table counts, timestamps
 - **Multi-table Support**: Handle multiple tables per session
 
-### 4. MCP Integration
+### 5. MCP Integration
 - **18+ Data Tools**: Filter, sort, clean, transform operations
 - **Safe Execution**: Tool-based approach prevents code injection
 - **Tool Tracking**: See which tools are used for each operation
@@ -212,6 +222,14 @@ Configured in `ingestion/config.py`:
    - Click "Execute Query"
    - View results and operation history
 
+3. **Visualize Data**:
+   - Switch to Visualization Centre tab
+   - Select chart type (Bar, Line, Scatter, etc.)
+   - Choose X and Y axis columns
+   - Optionally select color/grouping column
+   - Chart renders instantly
+   - Export as PNG, SVG, or HTML
+
 ### Example Queries
 
 ```
@@ -223,6 +241,16 @@ Configured in `ingestion/config.py`:
 "Group by department and calculate average salary"
 "Create a new column 'full_name' by combining 'first_name' and 'last_name'"
 ```
+
+### Visualization Examples
+
+**Bar Chart**: Select categorical column for X, numeric column for Y
+**Line Chart**: Perfect for time series data (date on X, value on Y)
+**Scatter Plot**: Explore correlations between two numeric variables
+**Histogram**: Distribution analysis of a single numeric column
+**Box Plot**: Outlier detection and quartile visualization
+**Pie Chart**: Proportional breakdown of categorical data
+**Heatmap**: Correlation matrix or pivot table visualization
 
 ### Command Line (MCP Client)
 
@@ -369,6 +397,7 @@ Data-Assistant/
 ├── app.py                      # Streamlit frontend application
 ├── main.py                     # FastAPI backend server
 ├── mcp_client.py              # MCP client with LangChain integration
+├── data_visualization.py      # Visualization Centre module
 ├── requirements.txt           # Python dependencies
 ├── README.md                  # This file
 │
@@ -474,19 +503,40 @@ Data-Assistant/
 - Error handling and logging
 - Base64 serialization for MCP integration
 
-### 5. Streamlit Frontend (`app.py`)
+### 5. Visualization Module (`data_visualization.py`)
 
-**Purpose**: Web-based user interface for file upload and data manipulation.
+**Purpose**: Provides zero-latency chart generation using Plotly with session data integration.
+
+**Key Functions**:
+- `render_visualization_tab()`: Main function to render the visualization tab
+- `get_dataframe_from_session()`: Fetches session data and converts to DataFrame
+- `generate_chart()`: Generate Plotly figure based on user selections
+
+**Features**:
+- 8 chart types: Bar, Line, Scatter, Area, Box, Histogram, Pie, Heatmap
+- Smart column selection with automatic defaults
+- Aggregation support (sum, mean, count, min, max)
+- Interactive Plotly charts with zoom/pan/hover
+- Export to PNG, SVG, and HTML formats
+- Theme-aware (light/dark mode support)
+- Multi-table support with table selection
+
+### 6. Streamlit Frontend (`app.py`)
+
+**Purpose**: Web-based user interface for file upload, data manipulation, and visualization.
 
 **Tabs**:
 1. **Upload Tab**: File upload, processing, and preview
 2. **Data Manipulation Tab**: Natural language queries, operation history, data preview
+3. **Visualization Centre Tab**: Interactive chart generation with Plotly, export options
 
 **Features**:
 - Real-time data preview
 - Operation history tracking
 - Session management UI
 - Error display and recovery
+- Interactive visualizations with Plotly
+- Chart export functionality
 
 ## 🛠 Development
 
@@ -566,6 +616,12 @@ Error: Session not found
 Error: Required library not installed
 ```
 **Solution**: Install Docling: `pip install docling` (for PDF) or ensure Gemini API key is set (for images)
+
+**7. Chart Export Fails**
+```
+Error: PNG/SVG export failed
+```
+**Solution**: Install Kaleido for static image exports: `pip install kaleido`
 
 ### Debug Mode
 

@@ -12,6 +12,7 @@ import os
 import asyncio
 import time
 from datetime import datetime
+from data_visualization import render_visualization_tab
 
 # FastAPI endpoint configuration
 FASTAPI_URL = "http://localhost:8001"
@@ -632,13 +633,16 @@ def main():
         st.caption("Made with ❤️ for data analysts")
     
     # Main content area with tabs
-    tab1, tab2 = st.tabs(["📤 Upload", "🔧 Data Manipulation"])
+    tab1, tab2, tab3 = st.tabs(["📤 Upload", "🔧 Data Manipulation", "📈 Visualization Centre"])
     
     with tab1:
         render_upload_tab()
     
     with tab2:
         render_manipulation_tab()
+    
+    with tab3:
+        render_visualization_tab()
 
 
 if __name__ == "__main__":
