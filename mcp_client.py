@@ -11,7 +11,6 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.outputs import LLMResult
 
 
 # Configuration
@@ -29,6 +28,16 @@ using the available tools. Always:
 2. Use appropriate tools to perform data operations
 3. Provide clear explanations of what operations were performed
 4. Show summaries of the results when available"""
+
+
+async def _cleanup_client(client):
+    """Clean up MCP client connections."""
+    try:
+        if hasattr(client, 'close'):
+            await client.close()
+    except (AttributeError, Exception):
+        # Client doesn't have close method or cleanup failed, skip silently
+        pass
 
 
 class ToolUsageCallback(BaseCallbackHandler):
@@ -234,8 +243,7 @@ async def analyze_data(session_id: str, query: str) -> str:
         
         return response["messages"][-1].content
     finally:
-        # Clean up client connections
-        await client.close()
+        await _cleanup_client(client)
 
 
 async def interactive_chat():
@@ -329,7 +337,7 @@ async def interactive_chat():
                 print(f"\n❌ Error: {e}\n")
     
     finally:
-        await client.close()
+        await _cleanup_client(client)
 
 
 def main():
