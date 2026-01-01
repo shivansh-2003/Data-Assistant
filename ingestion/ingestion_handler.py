@@ -27,7 +27,14 @@ def process_file(file_path: str, file_type: Optional[str] = None,
     tables = []
     
     try:
-        detected_file_type = file_type.lower() if file_type else IngestionConfig.get_file_type(file_path, mime_type)
+        # Valid file types
+        valid_types = {"csv", "excel", "pdf", "image"}
+        
+        # Use provided file_type only if it's valid, otherwise auto-detect
+        if file_type and file_type.lower() in valid_types:
+            detected_file_type = file_type.lower()
+        else:
+            detected_file_type = IngestionConfig.get_file_type(file_path, mime_type)
         
         if detected_file_type == "unknown":
             return _error_result(detected_file_type, time.time() - start_time, file_path,

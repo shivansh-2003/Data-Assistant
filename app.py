@@ -14,6 +14,7 @@ FASTAPI_URL = "http://localhost:8000"
 UPLOAD_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/file-upload"
 HEALTH_ENDPOINT = f"{FASTAPI_URL}/health"
 CONFIG_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/config"
+DELETE_SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 # Page configuration
 st.set_page_config(
@@ -87,6 +88,36 @@ def upload_file(file, file_type: str = None, session_id: str = None) -> Dict:
         return {"success": False, "error": str(e)}
 
 
+def delete_redis_session(session_id: str) -> bool:
+    """Delete session data from Redis."""
+    if not session_id:
+        return False
+    try:
+        response = requests.delete(f"{DELETE_SESSION_ENDPOINT}/{session_id}", timeout=5)
+        return response.status_code == 200
+    except:
+        return False
+
+
+def cleanup_current_session():
+    """Clean up current session from Redis if exists."""
+    # Check session state
+    if "current_session_id" in st.session_state and st.session_state.current_session_id:
+        delete_redis_session(st.session_state.current_session_id)
+        st.session_state.current_session_id = None
+    
+    # Also check query params (persists across reloads)
+    if "sid" in st.query_params:
+        delete_redis_session(st.query_params["sid"])
+        del st.query_params["sid"]
+
+
+def save_session_id(session_id: str):
+    """Save session_id to both session state and query params."""
+    st.session_state.current_session_id = session_id
+    st.query_params["sid"] = session_id
+
+
 def display_table_info(table_info: Dict, table_index: int):
     """Display information about a single table."""
     st.subheader(f"📋 Table {table_index + 1}")
@@ -127,6 +158,18 @@ def display_table_info(table_info: Dict, table_index: int):
 
 def main():
     """Main Streamlit application."""
+    
+    # Initialize session state for tracking Redis session
+    if "current_session_id" not in st.session_state:
+        st.session_state.current_session_id = None
+        # On fresh load, check if there's a stale session in query params to cleanup
+        if "sid" in st.query_params:
+            delete_redis_session(st.query_params["sid"])
+            del st.query_params["sid"]
+    
+    if "last_file_id" not in st.session_state:
+        st.session_state.last_file_id = None
+    
     # Header
     st.markdown('<div class="main-header">📊 Data Analyst Platform</div>', unsafe_allow_html=True)
     st.markdown("Upload your data files (CSV, Excel, PDF, Images) and explore them instantly!")
@@ -170,6 +213,13 @@ def main():
         help="Supported formats: CSV, Excel, PDF, Images"
     )
     
+    # Detect file clear/removal - cleanup Redis
+    current_file_id = uploaded_file.file_id if uploaded_file else None
+    if st.session_state.last_file_id and current_file_id != st.session_state.last_file_id:
+        # File was removed or changed - cleanup old session
+        cleanup_current_session()
+    st.session_state.last_file_id = current_file_id
+    
     # Optional file type hint
     file_type_hint = st.selectbox(
         "File Type (Optional - Auto-detected if not specified)",
@@ -194,6 +244,8 @@ def main():
                 
                 # Display results
                 if result.get("success"):
+                    # Store session_id for cleanup later (in both state and URL)
+                    save_session_id(result.get("session_id"))
                     st.success("✅ File processed successfully!")
                     
                     # Display metadata
@@ -254,6 +306,9 @@ def main():
                                 st.text(f"• {error}")
     
     else:
+        # No file uploaded - cleanup any existing session
+        cleanup_current_session()
+        
         # Show instructions when no file is uploaded
         st.info("👆 Please upload a file to get started")
         

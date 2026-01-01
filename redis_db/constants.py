@@ -1,19 +1,18 @@
-"""Constants for Redis backend configuration."""
+"""Constants for Upstash Redis configuration."""
 
 import os
-from datetime import timedelta
+from dotenv import load_dotenv
 
-# Redis Connection Settings
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_DB = int(os.getenv("REDIS_DB", 0))
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+load_dotenv()
 
-# Session TTL (Time To Live) in seconds
-SESSION_TTL = int(os.getenv("SESSION_TTL_MINUTES", 30)) * 60  # Default: 30 minutes
+# Upstash Redis REST API credentials
+# Get these from: https://console.upstash.com/ → Your Database → REST API section
+UPSTASH_REDIS_REST_URL = os.getenv("UPSTASH_REDIS_REST_URL", None)
+UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", None)
 
-# Redis Key Patterns
+# Session TTL in seconds (default: 30 minutes)
+SESSION_TTL = int(os.getenv("SESSION_TTL_MINUTES", 30)) * 60
+
+# Redis key patterns
 KEY_SESSION_TABLES = "session:{sid}:tables"
 KEY_SESSION_META = "session:{sid}:meta"
-KEY_SESSION_TTL = "session:{sid}:ttl"
-

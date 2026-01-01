@@ -1,24 +1,23 @@
-"""Redis backend for session storage and management."""
+"""Redis backend for session storage."""
 
 from .redis_store import (
-    save_session_tables,
-    load_session_tables,
+    save_session,
+    load_session,
     delete_session,
-    get_session_metadata,
+    get_metadata,
     session_exists,
-    create_empty_session,
-    extend_session_ttl,
-    list_active_sessions
+    extend_ttl,
+    list_sessions,
+    is_connected
 )
 
 __all__ = [
-    "save_session_tables",
-    "load_session_tables",
+    "save_session",
+    "load_session",
     "delete_session",
-    "get_session_metadata",
+    "get_metadata",
     "session_exists",
-    "create_empty_session",
-    "extend_session_ttl",
-    "list_active_sessions"
+    "extend_ttl",
+    "list_sessions",
+    "is_connected"
 ]
-
