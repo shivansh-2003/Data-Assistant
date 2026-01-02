@@ -14,6 +14,20 @@ import os
 
 # Import smart recommendations
 from .smart_recommendations import get_chart_recommendations
+# Import chart compositions
+from .chart_compositions import (
+    generate_combo_chart,
+    generate_small_multiples,
+    generate_faceted_chart,
+    generate_layered_chart
+)
+# Import dashboard builder
+from .dashboard_builder import (
+    render_dashboard_tab,
+    pin_chart_to_dashboard,
+    get_current_chart_config,
+    initialize_dashboard_state
+)
 
 # Session endpoint configuration
 # This should match the SESSION_ENDPOINT in app.py
@@ -197,6 +211,9 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
 
 def render_visualization_tab():
     """Render the Visualization Centre tab content."""
+    # Initialize dashboard state
+    initialize_dashboard_state()
+    
     st.header("📈 Visualization Centre")
     st.markdown("**Select columns below to build charts instantly. Pick aggregation for grouped data.**")
     
@@ -386,6 +403,26 @@ def render_visualization_tab():
     
     st.divider()
     
+    # Chart Mode Selection (Basic vs Compositions)
+    if 'viz_chart_mode' not in st.session_state:
+        st.session_state['viz_chart_mode'] = 'basic'
+    
+    chart_mode = st.radio(
+        "Chart Mode",
+        options=['basic', 'combo', 'small_multiples', 'faceted', 'layered'],
+        format_func=lambda x: {
+            'basic': '📊 Basic Chart',
+            'combo': '🔀 Combo Chart (Dual Y-Axes)',
+            'small_multiples': '📑 Small Multiples',
+            'faceted': '🔲 Faceted Chart',
+            'layered': '🎨 Layered Visualization'
+        }[x],
+        key="viz_chart_mode",
+        horizontal=True
+    )
+    
+    st.divider()
+    
     # Chart Controls in main area (using expander for cleaner UI)
     with st.expander("📊 Chart Controls", expanded=True):
         col1, col2, col3, col4 = st.columns(4)
@@ -494,58 +531,252 @@ def render_visualization_tab():
         with col_agg2:
             st.caption("💡 Tip: Select columns above to generate chart instantly")
     
+    # Composition-specific controls
+    composition_params = {}
+    if chart_mode != 'basic':
+        # Initialize composition params in session state if needed
+        if 'viz_composition_params' not in st.session_state:
+            st.session_state['viz_composition_params'] = {}
+        st.markdown("---")
+        st.subheader("🎨 Composition Settings")
+        
+        if chart_mode == 'combo':
+            # Combo chart controls
+            col_comp1, col_comp2, col_comp3 = st.columns(3)
+            with col_comp1:
+                y2_col = st.selectbox(
+                    "Second Y-Axis Column",
+                    options=cols,
+                    key="viz_y2_col",
+                    help="Second metric for right y-axis"
+                )
+            with col_comp2:
+                chart1_type = st.selectbox(
+                    "First Chart Type",
+                    options=['bar', 'line', 'scatter', 'area'],
+                    index=0,
+                    key="viz_combo_chart1"
+                )
+            with col_comp3:
+                chart2_type = st.selectbox(
+                    "Second Chart Type",
+                    options=['bar', 'line', 'scatter', 'area'],
+                    index=1,
+                    key="viz_combo_chart2"
+                )
+            composition_params = {
+                'y2_col': y2_col,
+                'chart1_type': chart1_type,
+                'chart2_type': chart2_type
+            }
+        
+        elif chart_mode == 'small_multiples' or chart_mode == 'faceted':
+            # Small multiples / Faceted controls
+            col_comp1, col_comp2 = st.columns(2)
+            with col_comp1:
+                facet_col = st.selectbox(
+                    "Facet/Group By Column",
+                    options=cols,
+                    key="viz_facet_col",
+                    help="Column to create separate charts for each value"
+                )
+            with col_comp2:
+                if chart_mode == 'small_multiples':
+                    base_chart_type = st.selectbox(
+                        "Base Chart Type",
+                        options=['bar', 'line', 'scatter', 'histogram'],
+                        index=0,
+                        key="viz_small_multiples_type"
+                    )
+                else:
+                    base_chart_type = st.selectbox(
+                        "Base Chart Type",
+                        options=['scatter', 'bar', 'line', 'box'],
+                        index=0,
+                        key="viz_faceted_type"
+                    )
+            composition_params = {
+                'facet_col': facet_col,
+                'base_chart_type': base_chart_type
+            }
+        
+        elif chart_mode == 'layered':
+            # Layered chart controls
+            col_comp1, col_comp2 = st.columns(2)
+            with col_comp1:
+                y_cols_multiselect = st.multiselect(
+                    "Y-Axis Columns (Multiple)",
+                    options=[c for c in df.columns.tolist() if c != x_col and c != 'None'],
+                    default=[y_col] if y_col != 'None' and y_col in df.columns else [],
+                    key="viz_layered_y_cols",
+                    help="Select multiple columns to layer"
+                )
+            with col_comp2:
+                opacity = st.slider(
+                    "Layer Opacity",
+                    min_value=0.1,
+                    max_value=1.0,
+                    value=0.7,
+                    step=0.1,
+                    key="viz_layered_opacity",
+                    help="Transparency level for layers"
+                )
+            composition_params = {
+                'y_cols': y_cols_multiselect,
+                'opacity': opacity
+            }
+    
     # Main area: Render chart
-    # Check if we have valid column selections for the chart type
+    # Check if we have valid column selections based on chart mode
     can_render = False
     validation_message = None
     
-    if chart_type in ['line', 'scatter', 'area']:
-        if x_col != 'None' and y_col != 'None':
+    # Handle composition modes first
+    if chart_mode == 'combo':
+        # Combo chart validation
+        if x_col != 'None' and y_col != 'None' and composition_params.get('y2_col') and composition_params['y2_col'] != 'None':
             can_render = True
         else:
-            validation_message = "⚠️ This chart type requires both X and Y columns. Please select both."
-    elif chart_type == 'box':
-        if y_col != 'None':
+            validation_message = "⚠️ Combo chart requires X, Y1, and Y2 columns."
+    
+    elif chart_mode == 'small_multiples' or chart_mode == 'faceted':
+        # Small multiples / Faceted validation
+        if x_col != 'None' and y_col != 'None' and composition_params.get('facet_col') and composition_params['facet_col'] != 'None':
             can_render = True
         else:
-            validation_message = "⚠️ Box plot requires Y column. Please select a Y-axis column."
-    elif chart_type == 'histogram':
-        if x_col != 'None':
+            validation_message = "⚠️ This composition requires X, Y, and Facet columns."
+    
+    elif chart_mode == 'layered':
+        # Layered chart validation
+        if x_col != 'None' and composition_params.get('y_cols') and len(composition_params['y_cols']) > 0:
             can_render = True
         else:
-            validation_message = "⚠️ Histogram requires X column. Please select an X-axis column."
-    elif chart_type == 'pie':
-        if x_col != 'None' or y_col != 'None':
-            can_render = True
-        else:
-            validation_message = "⚠️ Pie chart requires at least one column. Please select X or Y column."
-    elif chart_type == 'heatmap':
-        if x_col != 'None' and y_col != 'None':
-            can_render = True
-        else:
-            validation_message = "⚠️ Heatmap requires both X and Y columns. Please select both."
-    else:  # bar chart
-        if x_col != 'None' or y_col != 'None':
-            can_render = True
-        else:
-            validation_message = "⚠️ Please select at least one column (X or Y)."
+            validation_message = "⚠️ Layered chart requires X column and at least one Y column."
+    
+    else:  # basic mode
+        # Basic chart validation
+        if chart_type in ['line', 'scatter', 'area']:
+            if x_col != 'None' and y_col != 'None':
+                can_render = True
+            else:
+                validation_message = "⚠️ This chart type requires both X and Y columns. Please select both."
+        elif chart_type == 'box':
+            if y_col != 'None':
+                can_render = True
+            else:
+                validation_message = "⚠️ Box plot requires Y column. Please select a Y-axis column."
+        elif chart_type == 'histogram':
+            if x_col != 'None':
+                can_render = True
+            else:
+                validation_message = "⚠️ Histogram requires X column. Please select an X-axis column."
+        elif chart_type == 'pie':
+            if x_col != 'None' or y_col != 'None':
+                can_render = True
+            else:
+                validation_message = "⚠️ Pie chart requires at least one column. Please select X or Y column."
+        elif chart_type == 'heatmap':
+            if x_col != 'None' and y_col != 'None':
+                can_render = True
+            else:
+                validation_message = "⚠️ Heatmap requires both X and Y columns. Please select both."
+        else:  # bar chart
+            if x_col != 'None' or y_col != 'None':
+                can_render = True
+            else:
+                validation_message = "⚠️ Please select at least one column (X or Y)."
     
     if validation_message:
         st.warning(validation_message)
     
     if can_render:
         with st.spinner("Generating chart..."):
-            fig = generate_chart(
-                df, 
-                chart_type, 
-                x_col if x_col != 'None' else None,
-                y_col if y_col != 'None' else None, 
-                agg_func,
-                color_col if color_col != 'None' else None
-            )
+            # Generate chart based on mode
+            if chart_mode == 'basic':
+                fig = generate_chart(
+                    df, 
+                    chart_type, 
+                    x_col if x_col != 'None' else None,
+                    y_col if y_col != 'None' else None, 
+                    agg_func,
+                    color_col if color_col != 'None' else None
+                )
+            elif chart_mode == 'combo':
+                fig = generate_combo_chart(
+                    df,
+                    x_col if x_col != 'None' else None,
+                    y_col if y_col != 'None' else None,
+                    composition_params.get('y2_col') if composition_params.get('y2_col') != 'None' else None,
+                    composition_params.get('chart1_type', 'bar'),
+                    composition_params.get('chart2_type', 'line'),
+                    color_col if color_col != 'None' else None
+                )
+            elif chart_mode == 'small_multiples':
+                fig = generate_small_multiples(
+                    df,
+                    x_col if x_col != 'None' else None,
+                    y_col if y_col != 'None' else None,
+                    composition_params.get('facet_col') if composition_params.get('facet_col') != 'None' else None,
+                    composition_params.get('base_chart_type', 'bar')
+                )
+            elif chart_mode == 'faceted':
+                fig = generate_faceted_chart(
+                    df,
+                    x_col if x_col != 'None' else None,
+                    y_col if y_col != 'None' else None,
+                    composition_params.get('facet_col') if composition_params.get('facet_col') != 'None' else None,
+                    composition_params.get('base_chart_type', 'scatter')
+                )
+            elif chart_mode == 'layered':
+                # Determine layer types based on selected columns
+                layer_types = ['line'] * len(composition_params.get('y_cols', []))
+                fig = generate_layered_chart(
+                    df,
+                    x_col if x_col != 'None' else None,
+                    composition_params.get('y_cols', []),
+                    layer_types,
+                    composition_params.get('opacity', 0.7),
+                    color_col if color_col != 'None' else None
+                )
+            else:
+                # Fallback to basic chart
+                fig = generate_chart(
+                    df, 
+                    chart_type, 
+                    x_col if x_col != 'None' else None,
+                    y_col if y_col != 'None' else None, 
+                    agg_func,
+                    color_col if color_col != 'None' else None
+                )
         
         # Display interactive Plotly chart
         st.plotly_chart(fig, width='stretch', theme="streamlit")
+        
+        # Pin to Dashboard button
+        col_pin1, col_pin2 = st.columns([1, 4])
+        with col_pin1:
+            if st.button("📌 Pin to Dashboard", key="pin_chart_button", type="secondary"):
+                # Get current chart configuration
+                chart_config = get_current_chart_config(
+                    chart_mode,
+                    chart_type,
+                    x_col,
+                    y_col,
+                    agg_func,
+                    color_col,
+                    composition_params
+                )
+                
+                # Pin chart
+                if pin_chart_to_dashboard(chart_config):
+                    st.success("✅ Chart pinned to dashboard!")
+                    st.info("💡 Enable Dashboard Mode to view your pinned charts.")
+                else:
+                    st.error("❌ Failed to pin chart.")
+        with col_pin2:
+            pinned_count = len(st.session_state.get('dashboard_charts', []))
+            if pinned_count > 0:
+                st.caption(f"📊 {pinned_count} chart(s) pinned")
         
         # Data table below chart (optional toggle)
         if st.checkbox("Show Raw Data Preview", key="viz_table"):
@@ -556,13 +787,18 @@ def render_visualization_tab():
         st.subheader("📥 Export Chart")
         col1, col2, col3 = st.columns(3)
         
+        # Determine chart name for export
+        export_chart_name = chart_mode if chart_mode != 'basic' else chart_type
+        
         with col1:
             try:
-                img_bytes = fig.to_image(format="png", width=1200, height=800)
+                # Adjust height for composition charts
+                export_height = 1000 if chart_mode in ['small_multiples', 'faceted'] else 800
+                img_bytes = fig.to_image(format="png", width=1200, height=export_height)
                 st.download_button(
                     "📥 Download PNG", 
                     img_bytes, 
-                    f"chart_{chart_type}_{selected_table}.png", 
+                    f"chart_{export_chart_name}_{selected_table}.png", 
                     "image/png",
                     key="download_png",
                     width='stretch'
@@ -573,11 +809,12 @@ def render_visualization_tab():
         
         with col2:
             try:
-                svg_bytes = fig.to_image(format="svg", width=1200, height=800)
+                export_height = 1000 if chart_mode in ['small_multiples', 'faceted'] else 800
+                svg_bytes = fig.to_image(format="svg", width=1200, height=export_height)
                 st.download_button(
                     "📐 Download SVG", 
                     svg_bytes, 
-                    f"chart_{chart_type}_{selected_table}.svg", 
+                    f"chart_{export_chart_name}_{selected_table}.svg", 
                     "image/svg+xml",
                     key="download_svg",
                     width='stretch'
@@ -592,7 +829,7 @@ def render_visualization_tab():
                 st.download_button(
                     "🌐 Download HTML", 
                     html_str.encode(), 
-                    f"chart_{chart_type}_{selected_table}.html", 
+                    f"chart_{export_chart_name}_{selected_table}.html", 
                     "text/html",
                     key="download_html",
                     width='stretch'
@@ -616,4 +853,8 @@ def render_visualization_tab():
                     st.write(f"**For Y-Axis (Value):** Try `{numeric_cols[0]}`")
                 if len(categorical_cols) > 0 and len(numeric_cols) > 0:
                     st.write(f"**Example:** X=`{categorical_cols[0]}`, Y=`{numeric_cols[0]}`, Chart=`Bar`")
+    
+    # Dashboard View Section
+    st.divider()
+    dashboard_active = render_dashboard_tab(df, selected_table)
 
