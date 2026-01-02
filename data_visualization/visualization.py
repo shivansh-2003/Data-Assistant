@@ -10,10 +10,15 @@ import pandas as pd
 from typing import Optional
 import io
 import requests
+import os
 
-# Import session utilities from app.py
-# We'll use the same SESSION_ENDPOINT pattern
-SESSION_ENDPOINT = "http://localhost:8001/api/session"
+# Import smart recommendations
+from .smart_recommendations import get_chart_recommendations
+
+# Session endpoint configuration
+# This should match the SESSION_ENDPOINT in app.py
+FASTAPI_URL = os.getenv("FASTAPI_URL", "http://localhost:8001")
+SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 
 def get_dataframe_from_session(session_id: str, table_name: str) -> Optional[pd.DataFrame]:
@@ -246,16 +251,161 @@ def render_visualization_tab():
     
     st.divider()
     
+    # Smart Recommendations Section
+    # Store recommendations in session state to persist after rerun
+    if 'viz_recommendations' not in st.session_state:
+        st.session_state['viz_recommendations'] = None
+    if 'viz_user_goal_text' not in st.session_state:
+        st.session_state['viz_user_goal_text'] = ""
+    
+    # Determine if expander should be expanded (show if recommendations exist)
+    expander_expanded = st.session_state.get('viz_recommendations') is not None
+    
+    with st.expander("🤖 Smart Chart Recommendations", expanded=expander_expanded):
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            user_goal = st.text_input(
+                "Describe your visualization goal (optional):",
+                placeholder="e.g., Show sales trends over time, Compare revenue by department",
+                key="viz_user_goal",
+                value=st.session_state.get('viz_user_goal_text', '')
+            )
+        with col2:
+            recommend_button = st.button("✨ Get Recommendations", type="primary", width='stretch')
+        
+        if recommend_button:
+            # Store user goal in session state
+            st.session_state['viz_user_goal_text'] = user_goal
+            with st.spinner("🤔 Analyzing data and generating recommendations..."):
+                try:
+                    recommendations = get_chart_recommendations(df, user_goal if user_goal else None)
+                    # Store recommendations in session state to persist after rerun
+                    st.session_state['viz_recommendations'] = recommendations
+                except Exception as e:
+                    st.error(f"❌ Error generating recommendations: {str(e)}")
+                    st.info("💡 Falling back to rule-based recommendations...")
+                    recommendations = []
+                    st.session_state['viz_recommendations'] = None
+                
+                if recommendations:
+                    st.success(f"✅ Found {len(recommendations)} chart recommendations!")
+                    st.markdown("---")
+                    
+                    for idx, rec in enumerate(recommendations, 1):
+                        with st.container():
+                            col_rec1, col_rec2 = st.columns([1, 4])
+                            with col_rec1:
+                                st.metric("Rank", f"#{idx}", f"Relevance: {rec.get('relevance', 'N/A')}")
+                            with col_rec2:
+                                st.markdown(f"**Chart Type:** `{rec['chart_type'].upper()}`")
+                                if rec.get('x_column'):
+                                    st.markdown(f"**X-Axis:** `{rec['x_column']}`")
+                                if rec.get('y_column'):
+                                    st.markdown(f"**Y-Axis:** `{rec['y_column']}`")
+                                st.caption(f"💡 {rec.get('reasoning', 'No reasoning provided')}")
+                                
+                                # Quick apply button
+                                apply_key = f"apply_rec_{idx}_{rec['chart_type']}"
+                                if st.button(f"✨ Apply This Recommendation", key=apply_key):
+                                    # Update session state for chart controls
+                                    st.session_state['viz_chart_type'] = rec['chart_type']
+                                    
+                                    # Set X column
+                                    if rec.get('x_column') and rec['x_column'] in df.columns:
+                                        st.session_state['viz_x_col'] = rec['x_column']
+                                    else:
+                                        st.session_state['viz_x_col'] = 'None'
+                                    
+                                    # Set Y column
+                                    if rec.get('y_column') and rec['y_column'] in df.columns:
+                                        st.session_state['viz_y_col'] = rec['y_column']
+                                    else:
+                                        st.session_state['viz_y_col'] = 'None'
+                                    
+                                    # Set color column to None (optional)
+                                    if 'viz_color_col' not in st.session_state:
+                                        st.session_state['viz_color_col'] = 'None'
+                                    
+                                    st.success(f"✅ Applied recommendation #{idx}! Chart controls updated.")
+                                    # Force rerun to update the selectboxes
+                                    st.rerun()
+                            
+                            if idx < len(recommendations):
+                                st.markdown("---")
+                else:
+                    st.warning("⚠️ Could not generate recommendations. Please try manual selection.")
+                    st.session_state['viz_recommendations'] = None
+        
+        # Display stored recommendations if they exist (persists after apply button click)
+        stored_recommendations = st.session_state.get('viz_recommendations')
+        if stored_recommendations and not recommend_button:
+            st.markdown("---")
+            st.caption("💡 **Saved Recommendations** (click Apply to use):")
+            
+            for idx, rec in enumerate(stored_recommendations, 1):
+                with st.container():
+                    col_rec1, col_rec2 = st.columns([1, 4])
+                    with col_rec1:
+                        st.metric("Rank", f"#{idx}", f"Relevance: {rec.get('relevance', 'N/A')}")
+                    with col_rec2:
+                        st.markdown(f"**Chart Type:** `{rec['chart_type'].upper()}`")
+                        if rec.get('x_column'):
+                            st.markdown(f"**X-Axis:** `{rec['x_column']}`")
+                        if rec.get('y_column'):
+                            st.markdown(f"**Y-Axis:** `{rec['y_column']}`")
+                        st.caption(f"💡 {rec.get('reasoning', 'No reasoning provided')}")
+                        
+                        # Quick apply button (persistent version with different key)
+                        apply_key_persist = f"apply_rec_persist_{idx}_{rec['chart_type']}"
+                        if st.button(f"✨ Apply This Recommendation", key=apply_key_persist):
+                            # Update session state for chart controls
+                            st.session_state['viz_chart_type'] = rec['chart_type']
+                            
+                            # Set X column
+                            if rec.get('x_column') and rec['x_column'] in df.columns:
+                                st.session_state['viz_x_col'] = rec['x_column']
+                            else:
+                                st.session_state['viz_x_col'] = 'None'
+                            
+                            # Set Y column
+                            if rec.get('y_column') and rec['y_column'] in df.columns:
+                                st.session_state['viz_y_col'] = rec['y_column']
+                            else:
+                                st.session_state['viz_y_col'] = 'None'
+                            
+                            # Set color column to None (optional)
+                            if 'viz_color_col' not in st.session_state:
+                                st.session_state['viz_color_col'] = 'None'
+                            
+                            st.success(f"✅ Applied recommendation #{idx}! Chart controls updated.")
+                            # Force rerun to update the selectboxes
+                            st.rerun()
+                    
+                    if idx < len(stored_recommendations):
+                        st.markdown("---")
+    
+    st.divider()
+    
     # Chart Controls in main area (using expander for cleaner UI)
     with st.expander("📊 Chart Controls", expanded=True):
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             # Chart type selector
+            chart_options = ['bar', 'line', 'scatter', 'area', 'box', 'histogram', 'pie', 'heatmap']
+            # Initialize session state if not exists
+            if 'viz_chart_type' not in st.session_state:
+                st.session_state['viz_chart_type'] = 'bar'
+            
+            # Validate session state value exists in options
+            if st.session_state.get('viz_chart_type') not in chart_options:
+                st.session_state['viz_chart_type'] = 'bar'
+            
+            # When using key, Streamlit automatically uses session state value
+            # Don't use index parameter as it conflicts with key
             chart_type = st.selectbox(
                 "Chart Type",
-                options=['bar', 'line', 'scatter', 'area', 'box', 'histogram', 'pie', 'heatmap'],
-                index=0,
+                options=chart_options,
                 help="Bar for categories, Line for trends, Scatter for correlations, etc.",
                 key="viz_chart_type"
             )
@@ -263,35 +413,74 @@ def render_visualization_tab():
         with col2:
             # Column selectors - smart defaults
             cols = ['None'] + df.columns.tolist()
-            # Default to first categorical column for X, or first column if none
-            default_x_idx = 0
-            if len(df.columns) > 0:
-                # Try to find a good default (categorical or first column)
-                for i, col in enumerate(df.columns):
-                    if not pd.api.types.is_numeric_dtype(df[col]):
-                        default_x_idx = i + 1  # +1 because 'None' is at index 0
-                        break
-                if default_x_idx == 0 and len(df.columns) > 0:
-                    default_x_idx = 1  # Use first column as default
             
-            x_col = st.selectbox("X-Axis (or Category)", options=cols, index=default_x_idx, key="viz_x_col")
+            # Initialize or get X column from session state
+            if 'viz_x_col' not in st.session_state:
+                # Default to first categorical column for X, or first column if none
+                default_x_idx = 0
+                if len(df.columns) > 0:
+                    for i, col in enumerate(df.columns):
+                        if not pd.api.types.is_numeric_dtype(df[col]):
+                            default_x_idx = i + 1
+                            break
+                    if default_x_idx == 0 and len(df.columns) > 0:
+                        default_x_idx = 1
+                st.session_state['viz_x_col'] = cols[default_x_idx]
+            
+            # Validate session state value exists in current columns
+            if st.session_state.get('viz_x_col') not in cols:
+                # Reset to None if column doesn't exist anymore
+                st.session_state['viz_x_col'] = 'None'
+            
+            # When using key, Streamlit automatically uses session state value
+            # Don't use index parameter as it conflicts with key
+            x_col = st.selectbox(
+                "X-Axis (or Category)", 
+                options=cols, 
+                key="viz_x_col"
+            )
         
         with col3:
-            # Default to first numeric column for Y, or second column if none
-            default_y_idx = 0
-            if len(df.columns) > 1:
-                # Try to find a numeric column
-                for i, col in enumerate(df.columns):
-                    if pd.api.types.is_numeric_dtype(df[col]):
-                        default_y_idx = i + 1  # +1 because 'None' is at index 0
-                        break
-                if default_y_idx == 0 and len(df.columns) > 1:
-                    default_y_idx = 2 if len(df.columns) > 1 else 1  # Use second column as default
+            # Initialize or get Y column from session state
+            if 'viz_y_col' not in st.session_state:
+                # Default to first numeric column for Y, or second column if none
+                default_y_idx = 0
+                if len(df.columns) > 1:
+                    for i, col in enumerate(df.columns):
+                        if pd.api.types.is_numeric_dtype(df[col]):
+                            default_y_idx = i + 1
+                            break
+                    if default_y_idx == 0 and len(df.columns) > 1:
+                        default_y_idx = 2 if len(df.columns) > 1 else 1
+                st.session_state['viz_y_col'] = cols[default_y_idx]
             
-            y_col = st.selectbox("Y-Axis (or Value)", options=cols, index=default_y_idx, key="viz_y_col")
+            # Validate session state value exists in current columns
+            if st.session_state.get('viz_y_col') not in cols:
+                # Reset to None if column doesn't exist anymore
+                st.session_state['viz_y_col'] = 'None'
+            
+            # When using key, Streamlit automatically uses session state value
+            # Don't use index parameter as it conflicts with key
+            y_col = st.selectbox(
+                "Y-Axis (or Value)", 
+                options=cols, 
+                key="viz_y_col"
+            )
         
         with col4:
-            color_col = st.selectbox("Color/Group By (Optional)", options=cols, index=0, key="viz_color_col")
+            # Initialize color column if not exists
+            if 'viz_color_col' not in st.session_state:
+                st.session_state['viz_color_col'] = 'None'
+            
+            # Validate session state value exists in current columns
+            if st.session_state.get('viz_color_col') not in cols:
+                st.session_state['viz_color_col'] = 'None'
+            
+            color_col = st.selectbox(
+                "Color/Group By (Optional)", 
+                options=cols, 
+                key="viz_color_col"
+            )
         
         # Aggregation row
         col_agg1, col_agg2 = st.columns([1, 3])
