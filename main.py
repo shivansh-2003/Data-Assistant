@@ -17,18 +17,16 @@ import pickle
 import pandas as pd
 from typing import Optional, Dict, Any
 
-from ingestion.ingestion_handler import process_file
+from ingestion.ingestion_handler import IngestionHandler
+_default_handler = IngestionHandler()
+
 from ingestion.config import IngestionConfig
-from redis_db import (
-    save_session,
-    load_session,
-    delete_session,
-    get_metadata,
-    session_exists,
-    extend_ttl,
-    list_sessions,
-    is_connected
-)
+
+
+from redis_db import RedisStore
+
+# Create default store instance
+_default_store = RedisStore()
 
 # Configure logging
 logging.basicConfig(
@@ -60,7 +58,7 @@ async def root():
     return {
         "message": "Data Analyst Platform - Ingestion API",
         "version": "1.1.0",
-        "redis_connected": is_connected(),
+        "redis_connected": _default_store.is_connected(),
         "endpoints": {
             "file_upload": "/api/ingestion/file-upload",
             "health": "/health",
@@ -85,7 +83,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "ingestion-api",
-        "redis_connected": is_connected(),
+        "redis_connected": _default_store.is_connected(),
         "version": "1.1.0"
     }
 
@@ -138,7 +136,7 @@ async def file_upload(
         logger.info(f"Processing file: {file.filename} ({file_size} bytes)")
         
         # Process file using ingestion handler
-        result = process_file(temp_file_path, file_type, file.content_type)
+        result = _default_handler.process_file(temp_file_path, file_type, file.content_type)
         
         # Build response
         response_data = {
@@ -182,7 +180,7 @@ async def file_upload(
                 "processing_time": result["metadata"]["processing_time"]
             }
             
-            if save_session(session_id, tables_dict, session_metadata):
+            if _default_store.save_session(session_id, tables_dict, session_metadata):
                 response_data["redis_stored"] = True
                 logger.info(f"Session {session_id} stored in Redis with {len(tables_dict)} tables")
             else:
@@ -213,7 +211,7 @@ async def file_upload(
 async def get_all_sessions():
     """List all active sessions in Redis."""
     try:
-        sessions = list_sessions()
+        sessions = _default_store.list_sessions()
         return JSONResponse(content={
             "success": True,
             "count": len(sessions),
@@ -237,13 +235,13 @@ async def get_session_tables(
         format: "summary" (default) for table metadata, "full" for serialized DataFrames
     """
     try:
-        tables = load_session(session_id)
+        tables = _default_store.load_session(session_id)
         
         if tables is None:
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
         # Extend TTL on access
-        extend_ttl(session_id)
+        _default_store.extend_ttl(session_id)
         
         if format == "full":
             # Return full serialized DataFrames for MCP integration
@@ -298,13 +296,13 @@ async def get_session_tables(
 async def get_session_metadata(session_id: str):
     """Get session metadata."""
     try:
-        metadata = get_metadata(session_id)
+        metadata = _default_store.get_metadata(session_id)
         
         if metadata is None:
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
         # Extend TTL on access
-        extend_ttl(session_id)
+        _default_store.extend_ttl(session_id)
         
         return JSONResponse(content={
             "session_id": session_id,
@@ -383,15 +381,15 @@ async def update_session_tables(
                 )
         
         # Get existing metadata and merge updates
-        existing_metadata = get_metadata(session_id) or {}
+        existing_metadata = _default_store.get_metadata(session_id) or {}
         updated_metadata = {**existing_metadata, **metadata_updates}
         updated_metadata["last_updated"] = time.time()
         updated_metadata["updated_by"] = "mcp_server"
         
         # Save to Redis
-        if save_session(session_id, tables_dict, updated_metadata):
+        if _default_store.save_session(session_id, tables_dict, updated_metadata):
             # Extend TTL on successful update
-            extend_ttl(session_id)
+            _default_store.extend_ttl(session_id)
             
             logger.info(f"Successfully updated session {session_id} with {len(tables_dict)} tables")
             return JSONResponse(content={
@@ -417,10 +415,10 @@ async def delete_session_endpoint(session_id: str):
     Delete a session and wipe all its data from Redis.
     """
     try:
-        if not session_exists(session_id):
+        if not _default_store.session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
-        if delete_session(session_id):
+        if _default_store.delete_session(session_id):
             logger.info(f"Session {session_id} deleted from Redis")
             return JSONResponse(content={
                 "success": True,
@@ -440,10 +438,10 @@ async def delete_session_endpoint(session_id: str):
 async def extend_session_ttl(session_id: str):
     """Extend session TTL (keeps session alive longer)."""
     try:
-        if not session_exists(session_id):
+        if not _default_store.session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
-        if extend_ttl(session_id):
+        if _default_store.extend_ttl(session_id):
             return JSONResponse(content={
                 "success": True,
                 "message": f"Session '{session_id}' TTL extended"
