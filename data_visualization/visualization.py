@@ -8,7 +8,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 from typing import Optional
-import io
 import requests
 import os
 
@@ -28,6 +27,8 @@ from .dashboard_builder import (
     get_current_chart_config,
     initialize_dashboard_state
 )
+# Import utilities
+from .utils import create_error_figure, apply_theme
 
 # Session endpoint configuration
 # This should match the SESSION_ENDPOINT in app.py
@@ -89,10 +90,7 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
     Supports: bar, line, scatter, area, box, histogram, pie, heatmap.
     """
     if df.empty:
-        return go.Figure().add_annotation(
-            text="No data available—check your manipulations!", 
-            showarrow=False
-        )
+        return create_error_figure("No data available—check your manipulations!")
     
     # Apply aggregation if needed
     if agg_func != 'none' and y_col and y_col in df.columns:
@@ -118,28 +116,28 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
                 fig = px.bar(x=value_counts.index, y=value_counts.values, 
                            title=f"Bar Chart: Count by {x_col}")
             else:
-                fig = go.Figure().add_annotation(text="Bar chart requires at least X column", showarrow=False)
+                fig = create_error_figure("Bar chart requires at least X column")
                 
         elif chart_type == 'line':
             if y_col and y_col in df_agg.columns and x_col and x_col in df_agg.columns:
                 fig = px.line(df_agg, x=x_col, y=y_col, color=color_col if color_col and color_col != 'None' else None,
                             title=f"Line Chart: {y_col} over {x_col}")
             else:
-                fig = go.Figure().add_annotation(text="Line chart requires both X and Y columns", showarrow=False)
+                fig = create_error_figure("Line chart requires both X and Y columns")
                 
         elif chart_type == 'scatter':
             if y_col and y_col in df_agg.columns and x_col and x_col in df_agg.columns:
                 fig = px.scatter(df_agg, x=x_col, y=y_col, color=color_col if color_col and color_col != 'None' else None,
                                title=f"Scatter: {y_col} vs {x_col}")
             else:
-                fig = go.Figure().add_annotation(text="Scatter chart requires both X and Y columns", showarrow=False)
+                fig = create_error_figure("Scatter chart requires both X and Y columns")
                 
         elif chart_type == 'area':
             if y_col and y_col in df_agg.columns and x_col and x_col in df_agg.columns:
                 fig = px.area(df_agg, x=x_col, y=y_col, color=color_col if color_col and color_col != 'None' else None,
                             title=f"Area Chart: {y_col} over {x_col}")
             else:
-                fig = go.Figure().add_annotation(text="Area chart requires both X and Y columns", showarrow=False)
+                fig = create_error_figure("Area chart requires both X and Y columns")
                 
         elif chart_type == 'box':
             if y_col and y_col in df_agg.columns:
@@ -147,14 +145,14 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
                            color=color_col if color_col and color_col != 'None' else None,
                            title=f"Box Plot: {y_col}" + (f" by {x_col}" if x_col and x_col != 'None' else ""))
             else:
-                fig = go.Figure().add_annotation(text="Box plot requires Y column", showarrow=False)
+                fig = create_error_figure("Box plot requires Y column")
                 
         elif chart_type == 'histogram':
             if x_col and x_col in df_agg.columns:
                 fig = px.histogram(df_agg, x=x_col, color=color_col if color_col and color_col != 'None' else None,
                                  title=f"Histogram: Distribution of {x_col}")
             else:
-                fig = go.Figure().add_annotation(text="Histogram requires X column", showarrow=False)
+                fig = create_error_figure("Histogram requires X column")
                 
         elif chart_type == 'pie':
             if y_col and y_col in df_agg.columns:
@@ -164,7 +162,7 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
                 value_counts = df_agg[x_col].value_counts()
                 fig = px.pie(values=value_counts.values, names=value_counts.index, title=f"Pie: Distribution of {x_col}")
             else:
-                fig = go.Figure().add_annotation(text="Pie chart requires at least one column", showarrow=False)
+                fig = create_error_figure("Pie chart requires at least one column")
                 
         elif chart_type == 'heatmap':
             if x_col and x_col in df_agg.columns and y_col and y_col in df_agg.columns:
@@ -178,35 +176,23 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
                         aggfunc='mean' if pd.api.types.is_numeric_dtype(df_sample[y_col]) else 'count'
                     )
                     if pivot.empty:
-                        fig = go.Figure().add_annotation(text="Cannot create heatmap with selected columns", showarrow=False)
+                        fig = create_error_figure("Cannot create heatmap with selected columns")
                     else:
                         fig = px.imshow(pivot, title=f"Heatmap: {y_col} by {x_col}")
                 except Exception:
-                    fig = go.Figure().add_annotation(text="Heatmap needs numeric data—try different columns!", showarrow=False)
+                    fig = create_error_figure("Heatmap needs numeric data—try different columns!")
             else:
-                fig = go.Figure().add_annotation(text="Heatmap needs 2+ dimensions—try numeric cols!", showarrow=False)
+                fig = create_error_figure("Heatmap needs 2+ dimensions—try numeric cols!")
         else:
-            fig = go.Figure().add_annotation(text="Chart type not supported yet—coming soon!", showarrow=False)
+            fig = create_error_figure("Chart type not supported yet—coming soon!")
         
-        # Theme for dark/light mode compatibility
-        try:
-            # Try to detect Streamlit theme
-            theme = st.get_option("theme.base")
-            if theme == "dark":
-                fig.update_layout(template='plotly_dark')
-            else:
-                fig.update_layout(template='plotly_white')
-        except:
-            # Default to white theme
-            fig.update_layout(template='plotly_white')
+        # Apply theme
+        fig = apply_theme(fig)
         
         return fig
         
     except Exception as e:
-        return go.Figure().add_annotation(
-            text=f"Error generating chart: {str(e)}", 
-            showarrow=False
-        )
+        return create_error_figure(f"Error generating chart: {str(e)}")
 
 
 def render_visualization_tab():
@@ -225,7 +211,7 @@ def render_visualization_tab():
         st.info("💡 After uploading a file, you can create visualizations here.")
         return
     
-    # Get session tables
+    # Get session tables and select table
     try:
         response = requests.get(
             f"{SESSION_ENDPOINT}/{session_id}/tables",
@@ -234,24 +220,24 @@ def render_visualization_tab():
         )
         response.raise_for_status()
         tables_data = response.json()
+        tables = tables_data.get("tables", {})
+        
+        if not tables:
+            st.warning("⚠️ No tables found in session. Please upload a file first.")
+            return
+        
+        # Table selection
+        table_names = list(tables.keys())
+        if len(table_names) > 1:
+            selected_table = st.selectbox("Select Table to Visualize", table_names, key="viz_table_select")
+        else:
+            selected_table = table_names[0]
+        
+        # Get DataFrame from session
+        df = get_dataframe_from_session(session_id, selected_table)
     except Exception as e:
         st.error(f"❌ Error loading session data: {e}")
         return
-    
-    tables = tables_data.get("tables", {})
-    if not tables:
-        st.warning("⚠️ No tables found in session. Please upload a file first.")
-        return
-    
-    # Table selection
-    table_names = list(tables.keys())
-    if len(table_names) > 1:
-        selected_table = st.selectbox("Select Table to Visualize", table_names, key="viz_table_select")
-    else:
-        selected_table = table_names[0]
-    
-    # Get DataFrame from session
-    df = get_dataframe_from_session(session_id, selected_table)
     
     if df is None or df.empty:
         st.warning("⚠️ No data available for visualization. The table may be empty.")

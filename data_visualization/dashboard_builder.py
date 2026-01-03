@@ -5,7 +5,7 @@ Enables multi-chart layouts with flexible grid templates and chart pinning.
 
 import streamlit as st
 import plotly.graph_objects as go
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Optional
 import pandas as pd
 import json
 

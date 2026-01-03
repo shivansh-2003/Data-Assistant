@@ -9,7 +9,7 @@ from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict, Any
-import streamlit as st
+from .utils import create_error_figure
 
 
 def generate_combo_chart(
@@ -38,10 +38,7 @@ def generate_combo_chart(
         Plotly figure with dual y-axes
     """
     if df.empty or x_col not in df.columns or y1_col not in df.columns or y2_col not in df.columns:
-        return go.Figure().add_annotation(
-            text="Combo chart requires X, Y1, and Y2 columns",
-            showarrow=False
-        )
+        return create_error_figure("Combo chart requires X, Y1, and Y2 columns")
     
     # Create subplot with secondary y-axis
     fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -166,20 +163,14 @@ def generate_small_multiples(
         Plotly figure with subplots
     """
     if df.empty or x_col not in df.columns or y_col not in df.columns or facet_col not in df.columns:
-        return go.Figure().add_annotation(
-            text="Small multiples requires X, Y, and Facet columns",
-            showarrow=False
-        )
+        return create_error_figure("Small multiples requires X, Y, and Facet columns")
     
     # Get unique values for faceting
     facet_values = df[facet_col].unique()[:max_facets]
     n_facets = len(facet_values)
     
     if n_facets == 0:
-        return go.Figure().add_annotation(
-            text="No facet values found",
-            showarrow=False
-        )
+        return create_error_figure("No facet values found")
     
     # Calculate grid dimensions
     cols = min(3, n_facets)
@@ -287,20 +278,14 @@ def generate_faceted_chart(
         Plotly figure with faceted subplots
     """
     if df.empty or x_col not in df.columns or y_col not in df.columns or facet_col not in df.columns:
-        return go.Figure().add_annotation(
-            text="Faceted chart requires X, Y, and Facet columns",
-            showarrow=False
-        )
+        return create_error_figure("Faceted chart requires X, Y, and Facet columns")
     
     # Get unique values for faceting
     facet_values = sorted(df[facet_col].unique())[:max_facets]
     n_facets = len(facet_values)
     
     if n_facets == 0:
-        return go.Figure().add_annotation(
-            text="No facet values found",
-            showarrow=False
-        )
+        return create_error_figure("No facet values found")
     
     # Calculate grid dimensions (up to 4x4)
     max_cols = 4
@@ -402,16 +387,10 @@ def generate_layered_chart(
         Plotly figure with layered traces
     """
     if df.empty or x_col not in df.columns:
-        return go.Figure().add_annotation(
-            text="Layered chart requires X column and at least one Y column",
-            showarrow=False
-        )
+        return create_error_figure("Layered chart requires X column and at least one Y column")
     
     if not y_cols or len(y_cols) == 0:
-        return go.Figure().add_annotation(
-            text="Please select at least one Y column to layer",
-            showarrow=False
-        )
+        return create_error_figure("Please select at least one Y column to layer")
     
     if len(layer_types) != len(y_cols):
         # Default layer types

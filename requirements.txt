@@ -32,6 +32,8 @@ fastmcp
 langchain-mcp-adapters
 langchain
 langchain-openai
+langchain-experimental  # For pandas dataframe agent
+langgraph  # For checkpointer and state management
 
 # OpenAI (for GPT-5.1)
 openai
