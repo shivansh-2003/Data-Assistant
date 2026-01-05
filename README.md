@@ -31,7 +31,7 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 - **Backend**: FastAPI (REST API)
 - **Frontend**: Streamlit (Web UI)
 - **Data Storage**: Upstash Redis (Cloud Redis)
-- **AI/ML**: LangChain, OpenAI GPT models
+- **AI/ML**: LangChain, LangGraph, OpenAI GPT models, LangChain Experimental (pandas agent)
 - **Data Processing**: Pandas, Docling
 - **Visualization**: Plotly, Kaleido (for static exports)
 - **MCP Server**: FastMCP for tool-based operations
@@ -47,6 +47,13 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 │  │ - Preview    │  │ - Operation Hist │  │ - Interactive │ │
 │  └──────────────┘  │ - Data Preview   │  │ - Export      │ │
 │                    └──────────────────┘  └──────────────┘ │
+│  ┌──────────────────────────────────────────────────────┐ │
+│  │ Chatbot Tab                                          │ │
+│  │ - Conversational Interface                          │ │
+│  │ - Auto Visualization Detection                      │ │
+│  │ - Context-Aware Responses                           │ │
+│  │ - Session History Management                        │ │
+│  └──────────────────────────────────────────────────────┘ │
 └───────────────────────────┬───────────────────────────────┘
                             │ HTTP Requests
 ┌───────────────────────────▼───────────────────────────────┐
@@ -80,6 +87,15 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
             │   - LangChain Agent   │
             │   - OpenAI LLM        │
             └───────────────────────┘
+                        │
+            ┌───────────▼───────────┐
+            │   Chatbot Module      │
+            │   (chatbot/)          │
+            │   - LangChain Agent   │
+            │   - Pandas DF Agent   │
+            │   - LangGraph Memory  │
+            │   - Viz Detection     │
+            └───────────────────────┘
 ```
 
 ## ✨ Features
@@ -105,13 +121,22 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 - **One-Click Exports**: PNG, SVG, and interactive HTML formats
 - **Theme-Aware**: Automatically adapts to light/dark mode
 
-### 4. Session Management
+### 4. Chatbot Tab
+- **Intelligent Conversational Interface**: Ask questions about your data in natural language
+- **Context-Aware Responses**: Uses schema, statistics, and operation history for accurate answers
+- **Smart Visualization Detection**: Automatically detects when charts are needed and generates appropriate visualizations
+- **Session History Management**: Maintains conversation context within session boundaries using LangGraph checkpointer
+- **Multi-Query Support**: Handles statistical, comparative, exploratory, and debugging queries
+- **LangChain Integration**: Powered by pandas dataframe agent for safe data operations
+- **Real-time Chart Generation**: Embeds Plotly charts directly in chat responses when needed
+
+### 5. Session Management
 - **Automatic TTL**: Sessions expire after 30 minutes of inactivity
 - **TTL Extension**: Sessions auto-extend on access
 - **Metadata Tracking**: File names, table counts, timestamps
 - **Multi-table Support**: Handle multiple tables per session
 
-### 5. MCP Integration
+### 6. MCP Integration
 - **18+ Data Tools**: Filter, sort, clean, transform operations
 - **Safe Execution**: Tool-based approach prevents code injection
 - **Tool Tracking**: See which tools are used for each operation
@@ -230,6 +255,13 @@ Configured in `ingestion/config.py`:
    - Chart renders instantly
    - Export as PNG, SVG, or HTML
 
+4. **Chat with Your Data**:
+   - Switch to Chatbot tab
+   - Ask questions about your data (e.g., "What's the average salary by department?")
+   - Get context-aware answers with automatic visualizations when needed
+   - View conversation history and clear chat when needed
+   - Charts are automatically embedded in responses when relevant
+
 ### Example Queries
 
 ```
@@ -251,6 +283,33 @@ Configured in `ingestion/config.py`:
 **Box Plot**: Outlier detection and quartile visualization
 **Pie Chart**: Proportional breakdown of categorical data
 **Heatmap**: Correlation matrix or pivot table visualization
+
+### Chatbot Examples
+
+**Statistical Queries**:
+- "What's the average salary by department?"
+- "Show me the distribution of ages"
+- "What are the top 5 products by revenue?"
+
+**Comparative Queries**:
+- "Compare sales across different regions"
+- "Which department has the highest average salary?"
+- "Show me the difference between Q1 and Q2 sales"
+
+**Exploratory Queries**:
+- "What patterns do you see in the data?"
+- "Are there any outliers in the price column?"
+- "What's the correlation between age and salary?"
+
+**Debugging Queries**:
+- "Why did the row count drop after my last change?"
+- "What operations were performed on this data?"
+- "Show me the schema of the current data"
+
+**Visualization Requests**:
+- "Show me a bar chart of sales by region"
+- "Plot the trend of revenue over time"
+- "Visualize the distribution of ages"
 
 ### Command Line (MCP Client)
 
@@ -397,9 +456,18 @@ Data-Assistant/
 ├── app.py                      # Streamlit frontend application
 ├── main.py                     # FastAPI backend server
 ├── mcp_client.py              # MCP client with LangChain integration
-├── data_visualization.py      # Visualization Centre module
 ├── requirements.txt           # Python dependencies
 ├── README.md                  # This file
+│
+├── chatbot/                   # Chatbot module
+│   ├── __init__.py
+│   ├── agent.py              # LangChain agent setup and orchestration
+│   ├── session_loader.py     # Load DataFrames from Redis session
+│   ├── visualization_detector.py  # Detect visualization needs
+│   ├── history_manager.py    # Conversation history management
+│   ├── response_formatter.py # Format responses with charts
+│   ├── streamlit_ui.py       # Streamlit UI components
+│   └── chatbot.md            # Chatbot architecture documentation
 │
 ├── redis_db/                  # Redis session management
 │   ├── __init__.py
@@ -415,6 +483,14 @@ Data-Assistant/
 │   ├── excel_handler.py      # Excel file processor
 │   ├── pdf_handler.py        # PDF file processor (Docling)
 │   └── image_handler.py      # Image file processor (OCR)
+│
+├── data_visualization/        # Visualization module
+│   ├── __init__.py
+│   ├── visualization.py      # Main visualization tab
+│   ├── chart_compositions.py  # Advanced chart types
+│   ├── dashboard_builder.py   # Multi-chart layouts
+│   ├── smart_recommendations.py  # LLM-based chart recommendations
+│   └── utils.py              # Utility functions
 │
 ├── data-mcp/                  # MCP server for data operations
 │   ├── server.py             # FastMCP server
@@ -503,9 +579,15 @@ Data-Assistant/
 - Error handling and logging
 - Base64 serialization for MCP integration
 
-### 5. Visualization Module (`data_visualization.py`)
+### 5. Visualization Module (`data_visualization/`)
 
 **Purpose**: Provides zero-latency chart generation using Plotly with session data integration.
+
+**Key Components**:
+- `visualization.py`: Main visualization tab rendering
+- `dashboard_builder.py`: Multi-chart layouts and dashboard creation
+- `chart_compositions.py`: Advanced chart types (combo charts)
+- `smart_recommendations.py`: LLM-based chart type recommendations
 
 **Key Functions**:
 - `render_visualization_tab()`: Main function to render the visualization tab
@@ -520,15 +602,45 @@ Data-Assistant/
 - Export to PNG, SVG, and HTML formats
 - Theme-aware (light/dark mode support)
 - Multi-table support with table selection
+- Dashboard builder with grid layouts and chart pinning
 
-### 6. Streamlit Frontend (`app.py`)
+### 6. Chatbot Module (`chatbot/`)
 
-**Purpose**: Web-based user interface for file upload, data manipulation, and visualization.
+**Purpose**: Intelligent conversational interface for data queries with automatic visualization detection.
+
+**Key Components**:
+- `agent.py`: LangChain pandas dataframe agent setup and orchestration
+- `session_loader.py`: Loads DataFrames and metadata from Redis sessions
+- `visualization_detector.py`: Detects when visualizations are needed and infers chart types
+- `history_manager.py`: Manages conversation history using LangGraph checkpointer
+- `response_formatter.py`: Formats responses with embedded visualizations
+- `streamlit_ui.py`: Streamlit UI components for chat interface
+
+**Key Classes**:
+- `ChatbotAgent`: Main orchestrator for processing queries
+- `SessionLoader`: Loads session data and schema information
+- `VisualizationDetector`: Analyzes queries for visualization needs
+- `HistoryManager`: Manages conversation history with LangGraph
+- `ResponseFormatter`: Formats responses with charts
+- `ChatbotUI`: Streamlit UI rendering
+
+**Features**:
+- Context-aware responses using schema, statistics, and operation history
+- Automatic visualization detection (explicit and implicit)
+- Conversation history management per session
+- LangChain pandas dataframe agent for safe data operations
+- Real-time chart generation and embedding in responses
+- Support for statistical, comparative, exploratory, and debugging queries
+
+### 7. Streamlit Frontend (`app.py`)
+
+**Purpose**: Web-based user interface for file upload, data manipulation, visualization, and chatbot.
 
 **Tabs**:
 1. **Upload Tab**: File upload, processing, and preview
 2. **Data Manipulation Tab**: Natural language queries, operation history, data preview
 3. **Visualization Centre Tab**: Interactive chart generation with Plotly, export options
+4. **Chatbot Tab**: Conversational interface for data queries with automatic visualizations
 
 **Features**:
 - Real-time data preview
@@ -537,6 +649,8 @@ Data-Assistant/
 - Error display and recovery
 - Interactive visualizations with Plotly
 - Chart export functionality
+- Conversational chatbot interface
+- Automatic visualization detection in chat
 
 ## 🛠 Development
 
@@ -622,6 +736,16 @@ Error: Required library not installed
 Error: PNG/SVG export failed
 ```
 **Solution**: Install Kaleido for static image exports: `pip install kaleido`
+
+**8. Chatbot Not Responding**
+```
+Error: Agent execution failed
+```
+**Solution**: 
+- Ensure `OPENAI_API_KEY` is set correctly
+- Check that `langchain-experimental` and `langgraph` are installed: `pip install langchain-experimental langgraph`
+- Verify session data exists (upload a file first)
+- Check that FastAPI backend is running
 
 ### Debug Mode
 
