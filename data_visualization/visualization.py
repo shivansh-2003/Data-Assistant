@@ -77,7 +77,8 @@ def get_dataframe_from_session(session_id: str, table_name: str) -> Optional[pd.
 
 def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str], 
                    y_col: Optional[str], agg_func: str = 'none', 
-                   color_col: Optional[str] = None) -> go.Figure:
+                   color_col: Optional[str] = None,
+                   heatmap_columns: Optional[list] = None) -> go.Figure:
     """
     Generate Plotly figure based on user selections.
     Supports: bar, line, scatter, area, box, histogram, pie, heatmap.
@@ -158,8 +159,94 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
                 fig = create_error_figure("Pie chart requires at least one column")
                 
         elif chart_type == 'heatmap':
-            if x_col and x_col in df_agg.columns and y_col and y_col in df_agg.columns:
-                # Create pivot table for heatmap
+            # Support multiple columns for heatmap
+            if heatmap_columns and len(heatmap_columns) > 0:
+                # Filter out 'None' values
+                heatmap_cols = [col for col in heatmap_columns if col != 'None' and col in df_agg.columns]
+                
+                if len(heatmap_cols) == 0:
+                    fig = create_error_figure("Please select at least one column for heatmap")
+                elif len(heatmap_cols) == 1:
+                    # Single column - create a simple heatmap
+                    fig = create_error_figure("Heatmap requires at least 2 columns. Please select more columns.")
+                else:
+                    try:
+                        # Sample data for performance
+                        df_sample = df_agg[heatmap_cols].head(1000)
+                        
+                        # Check if all columns are numeric (correlation matrix)
+                        numeric_cols = [col for col in heatmap_cols if pd.api.types.is_numeric_dtype(df_sample[col])]
+                        
+                        if len(numeric_cols) == len(heatmap_cols):
+                            # All numeric - create correlation matrix
+                            corr_matrix = df_sample[numeric_cols].corr()
+                            fig = px.imshow(
+                                corr_matrix,
+                                title=f"Heatmap: Correlation Matrix ({len(numeric_cols)} columns)",
+                                labels=dict(color="Correlation"),
+                                color_continuous_scale='RdBu',
+                                aspect="auto"
+                            )
+                            fig.update_layout(
+                                xaxis_title="",
+                                yaxis_title="",
+                                height=max(400, len(numeric_cols) * 50)
+                            )
+                        elif len(numeric_cols) >= 2:
+                            # Mixed columns - use only numeric for correlation
+                            corr_matrix = df_sample[numeric_cols].corr()
+                            fig = px.imshow(
+                                corr_matrix,
+                                title=f"Heatmap: Correlation Matrix ({len(numeric_cols)} numeric columns)",
+                                labels=dict(color="Correlation"),
+                                color_continuous_scale='RdBu',
+                                aspect="auto"
+                            )
+                            fig.update_layout(
+                                xaxis_title="",
+                                yaxis_title="",
+                                height=max(400, len(numeric_cols) * 50)
+                            )
+                        else:
+                            # Not enough numeric columns - create pivot table if we have categorical
+                            # Use first categorical as index, second as columns, first numeric as values
+                            categorical_cols = [col for col in heatmap_cols if not pd.api.types.is_numeric_dtype(df_sample[col])]
+                            
+                            if len(categorical_cols) >= 2 and len(numeric_cols) >= 1:
+                                # Pivot table: categorical x categorical with numeric values
+                                pivot = df_sample.pivot_table(
+                                    values=numeric_cols[0],
+                                    index=categorical_cols[0],
+                                    columns=categorical_cols[1] if len(categorical_cols) > 1 else None,
+                                    aggfunc='mean'
+                                )
+                                if pivot.empty:
+                                    fig = create_error_figure("Cannot create heatmap pivot table with selected columns")
+                                else:
+                                    fig = px.imshow(
+                                        pivot,
+                                        title=f"Heatmap: {numeric_cols[0]} by {categorical_cols[0]}",
+                                        labels=dict(color=numeric_cols[0]),
+                                        aspect="auto"
+                                    )
+                            else:
+                                # Try to create a simple pivot with available columns
+                                if len(categorical_cols) >= 1 and len(numeric_cols) >= 1:
+                                    # Count by categorical column
+                                    pivot = df_sample.groupby(categorical_cols[0])[numeric_cols[0]].agg('mean').reset_index()
+                                    pivot = pivot.set_index(categorical_cols[0])[[numeric_cols[0]]].T
+                                    fig = px.imshow(
+                                        pivot,
+                                        title=f"Heatmap: {numeric_cols[0]} by {categorical_cols[0]}",
+                                        labels=dict(color=numeric_cols[0]),
+                                        aspect="auto"
+                                    )
+                                else:
+                                    fig = create_error_figure("Heatmap needs numeric columns for correlation or categorical columns for pivot table")
+                    except Exception as e:
+                        fig = create_error_figure(f"Heatmap error: {str(e)}")
+            elif x_col and x_col in df_agg.columns and y_col and y_col in df_agg.columns:
+                # Fallback to old behavior (X and Y columns)
                 try:
                     # Sample data for performance
                     df_sample = df_agg.head(1000)
@@ -175,7 +262,7 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
                 except Exception:
                     fig = create_error_figure("Heatmap needs numeric data—try different columns!")
             else:
-                fig = create_error_figure("Heatmap needs 2+ dimensions—try numeric cols!")
+                fig = create_error_figure("Heatmap needs 2+ columns—select multiple columns!")
         else:
             fig = create_error_figure("Chart type not supported yet—coming soon!")
         
@@ -495,6 +582,54 @@ def render_visualization_tab():
                 key="viz_color_col"
             )
         
+        # Heatmap-specific multi-column selector
+        heatmap_columns = None
+        if chart_type == 'heatmap':
+            st.markdown("---")
+            st.subheader("🔥 Heatmap Column Selection")
+            st.markdown("**Select multiple columns for correlation matrix or pivot table**")
+            
+            # Initialize heatmap columns in session state (only if not exists)
+            if 'viz_heatmap_cols' not in st.session_state:
+                st.session_state['viz_heatmap_cols'] = []
+            
+            # Filter to only include columns that exist
+            available_cols = [col for col in df.columns.tolist() if col in df.columns]
+            
+            # Get current value from session state, but filter out columns that no longer exist
+            current_selection = [col for col in st.session_state.get('viz_heatmap_cols', []) if col in available_cols]
+            
+            # Multi-select for heatmap columns
+            # Don't modify session state after widget creation - Streamlit handles it automatically via key
+            selected_heatmap_cols = st.multiselect(
+                "Select Columns for Heatmap",
+                options=available_cols,
+                default=current_selection,
+                help="Select 2+ columns. Numeric columns will create correlation matrix. Mix of categorical and numeric creates pivot table.",
+                key="viz_heatmap_cols"
+            )
+            
+            # Use the selected columns directly (session state is automatically updated by Streamlit)
+            heatmap_columns = selected_heatmap_cols
+            
+            # Show info about selection
+            if len(selected_heatmap_cols) > 0:
+                numeric_count = sum(1 for col in selected_heatmap_cols if pd.api.types.is_numeric_dtype(df[col]))
+                categorical_count = len(selected_heatmap_cols) - numeric_count
+                
+                if len(selected_heatmap_cols) < 2:
+                    st.warning("⚠️ Please select at least 2 columns for heatmap")
+                elif numeric_count == len(selected_heatmap_cols):
+                    st.info(f"✅ {numeric_count} numeric columns selected → Will create correlation matrix")
+                elif numeric_count >= 2:
+                    st.info(f"✅ {numeric_count} numeric + {categorical_count} categorical → Will create correlation matrix with numeric columns")
+                elif numeric_count >= 1 and categorical_count >= 1:
+                    st.info(f"✅ {numeric_count} numeric + {categorical_count} categorical → Will create pivot table")
+                else:
+                    st.warning("⚠️ Need at least 1 numeric column for heatmap")
+            else:
+                st.caption("💡 Select 2+ columns above. For correlation matrix, select numeric columns. For pivot table, select mix of categorical and numeric.")
+        
         # Aggregation row
         col_agg1, col_agg2 = st.columns([1, 3])
         with col_agg1:
@@ -583,10 +718,14 @@ def render_visualization_tab():
             else:
                 validation_message = "⚠️ Pie chart requires at least one column. Please select X or Y column."
         elif chart_type == 'heatmap':
-            if x_col != 'None' and y_col != 'None':
+            # Check if multi-column selection is used
+            if heatmap_columns and len(heatmap_columns) >= 2:
+                can_render = True
+            elif x_col != 'None' and y_col != 'None':
+                # Fallback to old X/Y column behavior
                 can_render = True
             else:
-                validation_message = "⚠️ Heatmap requires both X and Y columns. Please select both."
+                validation_message = "⚠️ Heatmap requires at least 2 columns. Use the multi-select above or select X and Y columns."
         else:  # bar chart
             if x_col != 'None' or y_col != 'None':
                 can_render = True
@@ -606,7 +745,8 @@ def render_visualization_tab():
                     x_col if x_col != 'None' else None,
                     y_col if y_col != 'None' else None, 
                     agg_func,
-                    color_col if color_col != 'None' else None
+                    color_col if color_col != 'None' else None,
+                    heatmap_columns if chart_type == 'heatmap' else None
                 )
             elif chart_mode == 'combo':
                 fig = generate_combo_chart(
@@ -655,7 +795,8 @@ def render_visualization_tab():
                     y_col,
                     agg_func,
                     color_col,
-                    composition_params
+                    composition_params,
+                    heatmap_columns if chart_type == 'heatmap' else None
                 )
                 
                 # Pin chart

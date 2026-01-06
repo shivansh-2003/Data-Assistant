@@ -112,7 +112,8 @@ class DashboardBuilder:
                 config.get('x_col'),
                 config.get('y_col'),
                 config.get('agg_func', 'none'),
-                config.get('color_col')
+                config.get('color_col'),
+                config.get('heatmap_columns')  # Support multi-column heatmaps
             )
         elif chart_mode == 'combo':
             return generate_combo_chart(
@@ -346,7 +347,8 @@ class DashboardBuilder:
         y_col: str,
         agg_func: str,
         color_col: Optional[str],
-        composition_params: Dict[str, Any]
+        composition_params: Dict[str, Any],
+        heatmap_columns: Optional[list] = None
     ) -> Dict[str, Any]:
         """
         Get current chart configuration for pinning.
@@ -371,6 +373,10 @@ class DashboardBuilder:
             'agg_func': agg_func,
             'color_col': color_col if color_col != 'None' else None
         }
+        
+        # Add heatmap columns if provided
+        if chart_type == 'heatmap' and heatmap_columns:
+            config['heatmap_columns'] = heatmap_columns
         
         # Add composition-specific params
         if chart_mode == 'combo':
