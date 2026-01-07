@@ -14,6 +14,7 @@ import uuid
 import time
 import base64
 import pickle
+import json
 import pandas as pd
 from typing import Optional, Dict, Any
 
@@ -24,6 +25,7 @@ from ingestion.config import IngestionConfig
 
 
 from redis_db import RedisStore
+from redis_db.constants import KEY_SESSION_GRAPH
 
 # Create default store instance
 _default_store = RedisStore()
@@ -177,12 +179,25 @@ async def file_upload(
                 "table_count": len(tables_dict),
                 "table_names": list(tables_dict.keys()),
                 "created_at": time.time(),
-                "processing_time": result["metadata"]["processing_time"]
+                "processing_time": result["metadata"]["processing_time"],
+                "current_version": "v0"
             }
             
             if _default_store.save_session(session_id, tables_dict, session_metadata):
                 response_data["redis_stored"] = True
                 logger.info(f"Session {session_id} stored in Redis with {len(tables_dict)} tables")
+                
+                # Create initial version v0
+                if _default_store.save_version(session_id, "v0", tables_dict):
+                    # Initialize graph with initial node
+                    _default_store.update_graph(
+                        session_id,
+                        parent_vid=None,
+                        new_vid="v0",
+                        operation="Initial Upload",
+                        query=None
+                    )
+                    logger.info(f"Created initial version v0 for session {session_id}")
             else:
                 response_data["redis_stored"] = False
                 logger.warning(f"Failed to store session {session_id} in Redis")
@@ -344,7 +359,7 @@ async def update_session_tables(
         }
     """
     try:
-        if not session_exists(session_id):
+        if not _default_store.session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
         tables_data = request_data.get("tables", {})
@@ -464,6 +479,298 @@ async def get_config():
         "supported_formats": {k: list(v) for k, v in IngestionConfig.FILE_TYPES.items()},
         "max_tables_per_file": IngestionConfig.MAX_TABLES_PER_FILE
     }
+
+
+# ============================================================================
+# Version Management Endpoints
+# ============================================================================
+
+@app.get("/api/session/{session_id}/versions")
+async def get_session_versions(session_id: str):
+    """
+    Get all versions and graph structure for a session.
+    
+    Returns:
+        Graph structure with nodes and edges
+    """
+    try:
+        if not _default_store.session_exists(session_id):
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        
+        graph = _default_store.get_graph(session_id)
+        
+        # Extend TTL on access
+        _default_store.extend_ttl(session_id)
+        
+        return JSONResponse(content={
+            "success": True,
+            "graph": graph
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting versions for {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/session/{session_id}/version/{version_id}")
+async def get_version_tables(session_id: str, version_id: str):
+    """
+    Get a specific version's tables (summary format).
+    
+    Used for previewing version data.
+    """
+    try:
+        if not _default_store.session_exists(session_id):
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        
+        tables = _default_store.load_version(session_id, version_id)
+        
+        if tables is None:
+            raise HTTPException(status_code=404, detail=f"Version '{version_id}' not found")
+        
+        # Extend TTL on access
+        _default_store.extend_ttl(session_id)
+        
+        # Return summary format
+        response = {
+            "session_id": session_id,
+            "version_id": version_id,
+            "table_count": len(tables),
+            "tables": {}
+        }
+        
+        for name, df in tables.items():
+            response["tables"][name] = {
+                "row_count": len(df),
+                "column_count": len(df.columns),
+                "columns": list(df.columns),
+                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                "preview": df.head(10).to_dict(orient="records")
+            }
+        
+        return JSONResponse(content=response)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error loading version {version_id} for {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/session/{session_id}/branch")
+async def create_branch(session_id: str, request_data: Dict[str, Any]):
+    """
+    Switch to a version (branch) by copying its tables to main session.
+    
+    Request Body:
+        {"version_id": "v1"}
+    """
+    try:
+        if not _default_store.session_exists(session_id):
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        
+        version_id = request_data.get("version_id")
+        if not version_id:
+            raise HTTPException(status_code=400, detail="version_id is required")
+        
+        # Load version tables
+        tables = _default_store.load_version(session_id, version_id)
+        if tables is None:
+            raise HTTPException(status_code=404, detail=f"Version '{version_id}' not found")
+        
+        # Get existing metadata
+        metadata = _default_store.get_metadata(session_id) or {}
+        
+        # Overwrite main session with version data
+        if _default_store.save_session(session_id, tables, metadata):
+            # Set current version
+            _default_store.set_current_version(session_id, version_id)
+            
+            # Extend TTL
+            _default_store.extend_ttl(session_id)
+            
+            logger.info(f"Branched session {session_id} to version {version_id}")
+            return JSONResponse(content={
+                "success": True,
+                "message": f"Branched to {version_id}",
+                "version_id": version_id
+            })
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save session")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error branching to version: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/session/{session_id}/save_version")
+async def save_version_endpoint(session_id: str, request_data: Dict[str, Any]):
+    """
+    Save current session tables as a new version.
+    
+    Request Body:
+        {
+            "version_id": "v1",
+            "operation": "Filtered rows",
+            "query": "Filter rows where age > 18"
+        }
+    """
+    try:
+        if not _default_store.session_exists(session_id):
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        
+        version_id = request_data.get("version_id")
+        operation = request_data.get("operation", "Operation")
+        query = request_data.get("query")
+        
+        if not version_id:
+            raise HTTPException(status_code=400, detail="version_id is required")
+        
+        # Get current session tables
+        tables = _default_store.load_session(session_id)
+        if tables is None:
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' tables not found")
+        
+        # Get current version from metadata
+        current_vid = _default_store.get_current_version(session_id) or "v0"
+        
+        # Save as new version
+        if _default_store.save_version(session_id, version_id, tables):
+            # Update graph
+            _default_store.update_graph(
+                session_id,
+                parent_vid=current_vid,
+                new_vid=version_id,
+                operation=operation,
+                query=query
+            )
+            
+            # Set as current version
+            _default_store.set_current_version(session_id, version_id)
+            
+            logger.info(f"Saved version {version_id} for session {session_id}")
+            return JSONResponse(content={
+                "success": True,
+                "message": f"Version {version_id} saved",
+                "version_id": version_id
+            })
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save version")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving version: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/session/{session_id}/version/{version_id}")
+async def delete_version_endpoint(session_id: str, version_id: str):
+    """
+    Delete a specific version and remove it from the graph.
+    
+    Used for manual pruning.
+    """
+    try:
+        if not _default_store.session_exists(session_id):
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        
+        # Delete version data
+        if _default_store.delete_version(session_id, version_id):
+            # Remove from graph
+            graph = _default_store.get_graph(session_id)
+            graph["nodes"] = [n for n in graph["nodes"] if n["id"] != version_id]
+            graph["edges"] = [e for e in graph["edges"] if e["from"] != version_id and e["to"] != version_id]
+            
+            # Save updated graph
+            key = KEY_SESSION_GRAPH.format(sid=session_id)
+            _default_store.redis.setex(key, _default_store.session_ttl, json.dumps(graph))
+            
+            logger.info(f"Deleted version {version_id} for session {session_id}")
+            return JSONResponse(content={
+                "success": True,
+                "message": f"Version {version_id} deleted"
+            })
+        else:
+            raise HTTPException(status_code=404, detail=f"Version '{version_id}' not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting version: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/session/{session_id}/prune_versions")
+async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[str, Any]] = None):
+    """
+    Prune old versions, keeping only the most recent N.
+    
+    Request Body (optional):
+        {"keep_last_n": 50}
+    """
+    try:
+        if not _default_store.session_exists(session_id):
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        
+        keep_last_n = None
+        if request_data:
+            keep_last_n = request_data.get("keep_last_n")
+        
+        if keep_last_n is None:
+            return JSONResponse(content={
+                "success": True,
+                "message": "No pruning limit specified, keeping all versions"
+            })
+        
+        # Get graph
+        graph = _default_store.get_graph(session_id)
+        nodes = graph.get("nodes", [])
+        
+        if len(nodes) <= keep_last_n:
+            return JSONResponse(content={
+                "success": True,
+                "message": f"Only {len(nodes)} versions exist, no pruning needed"
+            })
+        
+        # Sort nodes by timestamp (newest first)
+        nodes_sorted = sorted(nodes, key=lambda n: n.get("timestamp", 0), reverse=True)
+        
+        # Keep last N, delete the rest
+        to_keep = {n["id"] for n in nodes_sorted[:keep_last_n]}
+        to_delete = [n["id"] for n in nodes_sorted[keep_last_n:]]
+        
+        # Delete versions
+        deleted_count = 0
+        for vid in to_delete:
+            if _default_store.delete_version(session_id, vid):
+                deleted_count += 1
+        
+        # Update graph
+        graph["nodes"] = [n for n in nodes if n["id"] in to_keep]
+        graph["edges"] = [e for e in graph["edges"] if e["from"] in to_keep and e["to"] in to_keep]
+        
+        # Save updated graph
+        key = KEY_SESSION_GRAPH.format(sid=session_id)
+        _default_store.redis.setex(key, _default_store.session_ttl, json.dumps(graph))
+        
+        logger.info(f"Pruned {deleted_count} versions for session {session_id}")
+        return JSONResponse(content={
+            "success": True,
+            "message": f"Pruned {deleted_count} versions, kept {len(to_keep)}",
+            "deleted_count": deleted_count,
+            "kept_count": len(to_keep)
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error pruning versions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

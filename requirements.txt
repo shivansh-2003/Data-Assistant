@@ -41,4 +41,7 @@ openai
 google-genai
 
 # Upstash Redis (REST API)
-upstash-redis 
+upstash-redis
+
+# Graph Visualization
+graphviz 

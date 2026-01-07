@@ -11,9 +11,14 @@ from typing import Dict, List, Optional, Any
 import os
 import asyncio
 import time
+import uuid
+import logging
+import graphviz
 from datetime import datetime
 from data_visualization import render_visualization_tab
 from chatbot import render_chatbot_tab
+
+logger = logging.getLogger(__name__)
 
 # FastAPI endpoint configuration
 FASTAPI_URL = "http://localhost:8001"
@@ -472,6 +477,114 @@ def render_manipulation_tab():
     
     st.divider()
     
+    # Version History Graph Section
+    st.subheader("📜 Version History Graph")
+    
+    try:
+        response = requests.get(f"{FASTAPI_URL}/api/session/{session_id}/versions", timeout=5)
+        response.raise_for_status()
+        graph_data = response.json().get("graph", {"nodes": [], "edges": []})
+    except Exception as e:
+        st.info("No version history yet. Perform operations to build the graph.")
+        graph_data = {"nodes": [], "edges": []}
+    
+    # Render graph if nodes exist
+    if graph_data.get("nodes"):
+        # Create Graphviz graph
+        dot = graphviz.Digraph(comment='Version History')
+        dot.attr(rankdir='LR')  # Left to right layout
+        dot.attr('node', shape='box', style='rounded,filled', fillcolor='lightblue')
+        
+        # Add nodes
+        for node in graph_data.get("nodes", []):
+            label = node.get("label", node.get("id", "Unknown"))
+            dot.node(node["id"], label)
+        
+        # Add edges
+        for edge in graph_data.get("edges", []):
+            label = edge.get("label", "")
+            dot.edge(edge["from"], edge["to"], label=label)
+        
+        # Display graph
+        st.graphviz_chart(dot.source)
+        
+        # Branching controls
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            version_options = [n["id"] for n in graph_data.get("nodes", [])]
+            current_version = metadata.get("current_version", "v0")
+            selected_version = st.selectbox(
+                "Branch to version",
+                options=version_options,
+                index=version_options.index(current_version) if current_version in version_options else 0,
+                help="Select a version to branch from. New operations will start from this version."
+            )
+        
+        with col2:
+            branch_button = st.button("🌿 Branch", type="secondary")
+        
+        if branch_button and selected_version != current_version:
+            with st.spinner("Branching to selected version..."):
+                try:
+                    branch_response = requests.post(
+                        f"{FASTAPI_URL}/api/session/{session_id}/branch",
+                        json={"version_id": selected_version},
+                        timeout=10
+                    )
+                    if branch_response.status_code == 200:
+                        st.success(f"✅ Branched to {selected_version}. New operations will start from here.")
+                        st.rerun()
+                    else:
+                        st.error("Failed to branch to version.")
+                except Exception as e:
+                    st.error(f"Error branching: {e}")
+        
+        # Version details expander
+        if selected_version:
+            with st.expander(f"📋 Version Details: {selected_version}"):
+                version_node = next((n for n in graph_data.get("nodes", []) if n["id"] == selected_version), None)
+                if version_node:
+                    st.write(f"**Operation:** {version_node.get('operation', 'N/A')}")
+                    if version_node.get('query'):
+                        st.write(f"**Query:** {version_node.get('query')}")
+                    if version_node.get('timestamp'):
+                        dt = datetime.fromtimestamp(version_node['timestamp'])
+                        st.write(f"**Created:** {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Pruning controls
+        with st.expander("🗑️ Prune Versions"):
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                keep_n = st.number_input(
+                    "Keep last N versions",
+                    min_value=1,
+                    max_value=100,
+                    value=len(graph_data.get("nodes", [])),
+                    help="Prune old versions, keeping only the most recent N"
+                )
+            with col2:
+                prune_button = st.button("Prune", type="secondary")
+            
+            if prune_button:
+                with st.spinner("Pruning versions..."):
+                    try:
+                        prune_response = requests.post(
+                            f"{FASTAPI_URL}/api/session/{session_id}/prune_versions",
+                            json={"keep_last_n": int(keep_n)},
+                            timeout=10
+                        )
+                        if prune_response.status_code == 200:
+                            st.success(f"✅ Pruned versions. Kept last {keep_n}.")
+                            st.rerun()
+                        else:
+                            st.error("Failed to prune versions.")
+                    except Exception as e:
+                        st.error(f"Error pruning: {e}")
+    else:
+        st.info("📝 Upload a file and perform operations to see version history.")
+    
+    st.divider()
+    
     # Natural Language Query Input
     st.subheader("💬 Natural Language Query")
     query = st.text_area(
@@ -507,7 +620,9 @@ def render_manipulation_tab():
         with st.expander("View Operation History", expanded=False):
             for idx, op in enumerate(reversed(st.session_state.operation_history[-10:]), 1):
                 dt = datetime.fromtimestamp(op["timestamp"])
-                st.text(f"{idx}. [{dt.strftime('%H:%M:%S')}] {op.get('description', op.get('operation', 'Unknown'))}")
+                version_id = op.get("version_id", "")
+                version_text = f" [{version_id}]" if version_id else ""
+                st.text(f"{idx}. [{dt.strftime('%H:%M:%S')}]{version_text} {op.get('description', op.get('operation', 'Unknown'))}")
     
     # Execute query
     if execute_button and query:
@@ -535,12 +650,51 @@ def render_manipulation_tab():
                     if not new_tables_data:
                         st.warning("⚠️ Could not verify data update. Please refresh manually.")
                     
-                    # Add to operation history
+                    # Create new version after successful operation
+                    try:
+                        # Get current version from metadata
+                        current_metadata = get_session_metadata_for_display(session_id)
+                        current_vid = current_metadata.get("current_version", "v0") if current_metadata else "v0"
+                        
+                        # Get graph to determine next version number
+                        graph_response = requests.get(f"{FASTAPI_URL}/api/session/{session_id}/versions", timeout=5)
+                        if graph_response.status_code == 200:
+                            graph_data = graph_response.json().get("graph", {"nodes": []})
+                            # Generate new version ID
+                            new_vid = f"v{len(graph_data.get('nodes', []))}"
+                        else:
+                            # Fallback: use UUID short
+                            new_vid = f"v_{str(uuid.uuid4())[:8]}"
+                        
+                        # Extract operation description from query (first 50 chars)
+                        operation_desc = query[:50] + "..." if len(query) > 50 else query
+                        
+                        # Save new version
+                        save_version_response = requests.post(
+                            f"{FASTAPI_URL}/api/session/{session_id}/save_version",
+                            json={
+                                "version_id": new_vid,
+                                "operation": operation_desc,
+                                "query": query
+                            },
+                            timeout=10
+                        )
+                        
+                        if save_version_response.status_code == 200:
+                            logger.info(f"Created version {new_vid} for session {session_id}")
+                        else:
+                            logger.warning(f"Failed to save version {new_vid}: {save_version_response.text}")
+                    except Exception as e:
+                        logger.error(f"Error creating version: {e}")
+                        # Continue anyway - versioning failure shouldn't block the operation
+                    
+                    # Add to operation history with version ID
                     st.session_state.operation_history.append({
                         "timestamp": time.time(),
                         "operation": "QUERY",
                         "description": query,
-                        "response": result.get("response", "")
+                        "response": result.get("response", ""),
+                        "version_id": new_vid if 'new_vid' in locals() else None
                     })
                     
                     st.success("✅ Operation completed successfully!")

@@ -9,7 +9,8 @@ import pandas as pd
 
 from .constants import (
     UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN,
-    SESSION_TTL, KEY_SESSION_TABLES, KEY_SESSION_META
+    SESSION_TTL, KEY_SESSION_TABLES, KEY_SESSION_META,
+    KEY_VERSION_TABLES, KEY_SESSION_GRAPH
 )
 from .serializer import DataFrameSerializer
 
@@ -172,7 +173,7 @@ class RedisStore:
     
     def delete_session(self, session_id: str) -> bool:
         """
-        Delete session and all its data from Redis.
+        Delete session and all its data from Redis, including versions and graph.
         
         Args:
             session_id: Session identifier
@@ -186,9 +187,16 @@ class RedisStore:
         try:
             key_tables = KEY_SESSION_TABLES.format(sid=session_id)
             key_meta = KEY_SESSION_META.format(sid=session_id)
+            key_graph = KEY_SESSION_GRAPH.format(sid=session_id)
             
-            deleted = self.redis.delete(key_tables, key_meta)
-            self.logger.info(f"Deleted session {session_id} ({deleted} keys)")
+            # Delete all versions
+            versions = self.list_versions(session_id)
+            for version_id in versions:
+                self.delete_version(session_id, version_id)
+            
+            # Delete main session keys and graph
+            deleted = self.redis.delete(key_tables, key_meta, key_graph)
+            self.logger.info(f"Deleted session {session_id} ({deleted} keys, {len(versions)} versions)")
             return deleted > 0
             
         except Exception as e:
@@ -281,3 +289,286 @@ class RedisStore:
         except Exception as e:
             self.logger.error(f"Failed to list sessions: {e}")
             return []
+    
+    # ============================================================================
+    # Version Management Methods
+    # ============================================================================
+    
+    def save_version(
+        self,
+        session_id: str,
+        version_id: str,
+        tables: Dict[str, pd.DataFrame]
+    ) -> bool:
+        """
+        Save a version's tables to Redis.
+        
+        Args:
+            session_id: Session identifier
+            version_id: Version identifier (e.g., "v0", "v1")
+            tables: Dictionary mapping table names to DataFrames
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.is_connected():
+            self.logger.error("Upstash Redis not connected")
+            return False
+        
+        try:
+            key = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
+            
+            # Serialize tables using DataFrameSerializer
+            tables_bytes = self.serializer.serialize(tables)
+            tables_b64 = base64.b64encode(tables_bytes).decode('utf-8')
+            
+            # Store version tables with TTL
+            self.redis.setex(key, self.session_ttl, tables_b64)
+            
+            # Extend main session TTL
+            self.extend_ttl(session_id)
+            
+            self.logger.info(f"Saved version {version_id} for session {session_id}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save version {version_id} for {session_id}: {e}")
+            return False
+    
+    def load_version(
+        self,
+        session_id: str,
+        version_id: str
+    ) -> Optional[Dict[str, pd.DataFrame]]:
+        """
+        Load a specific version's tables from Redis.
+        
+        Args:
+            session_id: Session identifier
+            version_id: Version identifier
+            
+        Returns:
+            Dictionary mapping table names to DataFrames, or None if not found
+        """
+        if not self.is_connected():
+            return None
+        
+        try:
+            key = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
+            data = self.redis.get(key)
+            
+            if data is None:
+                return None
+            
+            # Decode base64 and deserialize
+            tables_bytes = base64.b64decode(data)
+            tables = self.serializer.deserialize(tables_bytes)
+            
+            # Extend TTL on access
+            self.extend_ttl(session_id)
+            
+            return tables
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load version {version_id} for {session_id}: {e}")
+            return None
+    
+    def delete_version(self, session_id: str, version_id: str) -> bool:
+        """
+        Delete a version and its data from Redis.
+        
+        Args:
+            session_id: Session identifier
+            version_id: Version identifier
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.is_connected():
+            return False
+        
+        try:
+            key = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
+            deleted = self.redis.delete(key)
+            self.logger.info(f"Deleted version {version_id} for session {session_id}")
+            return deleted > 0
+            
+        except Exception as e:
+            self.logger.error(f"Failed to delete version {version_id} for {session_id}: {e}")
+            return False
+    
+    def list_versions(self, session_id: str) -> List[str]:
+        """
+        List all version IDs for a session.
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            List of version ID strings
+        """
+        if not self.is_connected():
+            return []
+        
+        try:
+            versions = []
+            pattern = KEY_VERSION_TABLES.format(sid=session_id, vid="*")
+            
+            # Use SCAN to find all version keys
+            cursor = 0
+            while True:
+                result = self.redis.scan(cursor, match=pattern, count=100)
+                cursor = result[0]
+                keys = result[1]
+                
+                for key in keys:
+                    try:
+                        # Extract version_id from key: session:{sid}:version:{vid}:tables
+                        parts = key.split(':')
+                        if len(parts) >= 4 and parts[3] == "version":
+                            version_id = parts[4]
+                            versions.append(version_id)
+                    except Exception:
+                        continue
+                
+                if cursor == 0:
+                    break
+            
+            return versions
+            
+        except Exception as e:
+            self.logger.error(f"Failed to list versions for {session_id}: {e}")
+            return []
+    
+    # ============================================================================
+    # Graph Management Methods
+    # ============================================================================
+    
+    def get_graph(self, session_id: str) -> Dict[str, Any]:
+        """
+        Get the graph JSON structure (nodes and edges).
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            Dictionary with "nodes" and "edges" keys, or empty structure if not found
+        """
+        if not self.is_connected():
+            return {"nodes": [], "edges": []}
+        
+        try:
+            key = KEY_SESSION_GRAPH.format(sid=session_id)
+            data = self.redis.get(key)
+            
+            if data is None:
+                return {"nodes": [], "edges": []}
+            
+            graph = json.loads(data)
+            return graph
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get graph for {session_id}: {e}")
+            return {"nodes": [], "edges": []}
+    
+    def update_graph(
+        self,
+        session_id: str,
+        parent_vid: Optional[str],
+        new_vid: str,
+        operation: str,
+        query: Optional[str] = None
+    ) -> bool:
+        """
+        Add a new node and edge to the graph.
+        
+        Args:
+            session_id: Session identifier
+            parent_vid: Parent version ID (None for initial version)
+            new_vid: New version ID
+            operation: Operation description/label
+            query: Optional query text that created this version
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.is_connected():
+            return False
+        
+        try:
+            graph = self.get_graph(session_id)
+            
+            # Add new node
+            new_node = {
+                "id": new_vid,
+                "label": f"{new_vid}: {operation}" if operation else new_vid,
+                "operation": operation,
+                "query": query,
+                "timestamp": time.time()
+            }
+            graph["nodes"].append(new_node)
+            
+            # Add edge if parent exists
+            if parent_vid:
+                new_edge = {
+                    "from": parent_vid,
+                    "to": new_vid,
+                    "label": operation or "Operation"
+                }
+                graph["edges"].append(new_edge)
+            
+            # Save updated graph
+            key = KEY_SESSION_GRAPH.format(sid=session_id)
+            self.redis.setex(key, self.session_ttl, json.dumps(graph))
+            
+            # Extend TTL
+            self.extend_ttl(session_id)
+            
+            self.logger.info(f"Updated graph for {session_id}: added {new_vid}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to update graph for {session_id}: {e}")
+            return False
+    
+    def set_current_version(self, session_id: str, version_id: str) -> bool:
+        """
+        Update metadata to track current version.
+        
+        Args:
+            session_id: Session identifier
+            version_id: Version identifier to set as current
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.is_connected():
+            return False
+        
+        try:
+            metadata = self.get_metadata(session_id) or {}
+            metadata["current_version"] = version_id
+            
+            key_meta = KEY_SESSION_META.format(sid=session_id)
+            self.redis.setex(key_meta, self.session_ttl, json.dumps(metadata))
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to set current version for {session_id}: {e}")
+            return False
+    
+    def get_current_version(self, session_id: str) -> Optional[str]:
+        """
+        Get the current version ID from metadata.
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            Current version ID string, or None if not found
+        """
+        metadata = self.get_metadata(session_id)
+        if metadata:
+            return metadata.get("current_version")
+        return None

@@ -16,3 +16,5 @@ SESSION_TTL = int(os.getenv("SESSION_TTL_MINUTES", 30)) * 60
 # Redis key patterns
 KEY_SESSION_TABLES = "session:{sid}:tables"
 KEY_SESSION_META = "session:{sid}:meta"
+KEY_VERSION_TABLES = "session:{sid}:version:{vid}:tables"
+KEY_SESSION_GRAPH = "session:{sid}:graph"
