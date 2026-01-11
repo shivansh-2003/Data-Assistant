@@ -75,6 +75,22 @@ class RedisStore:
         except Exception:
             return False
     
+    def _sync_version_ttls(self, session_id: str) -> None:
+        """
+        Sync TTL for all version keys to match the main session TTL.
+        This ensures all session-related keys expire together automatically.
+        
+        Args:
+            session_id: Session identifier
+        """
+        try:
+            versions = self.list_versions(session_id)
+            for version_id in versions:
+                key_version = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
+                self.redis.expire(key_version, self.session_ttl)
+        except Exception as e:
+            self.logger.warning(f"Failed to sync version TTLs for {session_id}: {e}")
+    
     def save_session(
         self,
         session_id: str,
@@ -83,6 +99,7 @@ class RedisStore:
     ) -> bool:
         """
         Save DataFrames and metadata to Upstash Redis with TTL.
+        All keys are set with the same TTL for automatic expiration.
         
         Args:
             session_id: Session identifier
@@ -99,18 +116,31 @@ class RedisStore:
         try:
             key_tables = KEY_SESSION_TABLES.format(sid=session_id)
             key_meta = KEY_SESSION_META.format(sid=session_id)
+            key_graph = KEY_SESSION_GRAPH.format(sid=session_id)
             
             # Serialize tables using DataFrameSerializer
             tables_bytes = self.serializer.serialize(tables)
             tables_b64 = base64.b64encode(tables_bytes).decode('utf-8')
             
-            # Store tables with TTL
+            # Store tables with TTL (automatic expiration)
             self.redis.setex(key_tables, self.session_ttl, tables_b64)
             
-            # Store metadata with TTL
+            # Store metadata with TTL (automatic expiration)
             self.redis.setex(key_meta, self.session_ttl, json.dumps(metadata))
             
-            self.logger.info(f"Saved session {session_id} with {len(tables)} tables")
+            # Ensure graph exists with TTL (automatic expiration)
+            if self.redis.exists(key_graph) == 0:
+                # Initialize empty graph if it doesn't exist
+                empty_graph = {"nodes": [], "edges": []}
+                self.redis.setex(key_graph, self.session_ttl, json.dumps(empty_graph))
+            else:
+                # Update TTL on existing graph
+                self.redis.expire(key_graph, self.session_ttl)
+            
+            # Sync TTL for all existing version keys to match session TTL
+            self._sync_version_ttls(session_id)
+            
+            self.logger.info(f"Saved session {session_id} with {len(tables)} tables (TTL: {self.session_ttl}s)")
             return True
             
         except Exception as e:
@@ -173,7 +203,8 @@ class RedisStore:
     
     def delete_session(self, session_id: str) -> bool:
         """
-        Delete session and all its data from Redis, including versions and graph.
+        Delete session and ALL its data from Redis.
+        This includes: main tables, metadata, graph, and all version tables.
         
         Args:
             session_id: Session identifier
@@ -185,18 +216,29 @@ class RedisStore:
             return False
         
         try:
-            key_tables = KEY_SESSION_TABLES.format(sid=session_id)
-            key_meta = KEY_SESSION_META.format(sid=session_id)
-            key_graph = KEY_SESSION_GRAPH.format(sid=session_id)
+            # Find and delete ALL keys for this session using pattern matching
+            pattern = f"session:{session_id}:*"
+            cursor = 0
+            all_keys = []
             
-            # Delete all versions
-            versions = self.list_versions(session_id)
-            for version_id in versions:
-                self.delete_version(session_id, version_id)
+            # Scan for all keys matching this session
+            while True:
+                result = self.redis.scan(cursor, match=pattern, count=100)
+                cursor = result[0]
+                keys = result[1]
+                all_keys.extend(keys)
+                
+                if cursor == 0:
+                    break
             
-            # Delete main session keys and graph
-            deleted = self.redis.delete(key_tables, key_meta, key_graph)
-            self.logger.info(f"Deleted session {session_id} ({deleted} keys, {len(versions)} versions)")
+            if not all_keys:
+                self.logger.warning(f"No keys found for session {session_id}")
+                return False
+            
+            # Delete all keys at once
+            deleted = self.redis.delete(*all_keys)
+            
+            self.logger.info(f"Deleted session {session_id} - removed {deleted} keys: {len(all_keys)} found")
             return deleted > 0
             
         except Exception as e:
@@ -225,7 +267,7 @@ class RedisStore:
     
     def extend_ttl(self, session_id: str) -> bool:
         """
-        Extend session TTL.
+        Extend session TTL for all session keys including versions and graph.
         
         Args:
             session_id: Session identifier
@@ -239,9 +281,19 @@ class RedisStore:
         try:
             key_tables = KEY_SESSION_TABLES.format(sid=session_id)
             key_meta = KEY_SESSION_META.format(sid=session_id)
+            key_graph = KEY_SESSION_GRAPH.format(sid=session_id)
             
+            # Extend main session keys
             self.redis.expire(key_tables, self.session_ttl)
             self.redis.expire(key_meta, self.session_ttl)
+            self.redis.expire(key_graph, self.session_ttl)
+            
+            # Extend all version keys
+            versions = self.list_versions(session_id)
+            for version_id in versions:
+                key_version = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
+                self.redis.expire(key_version, self.session_ttl)
+            
             return True
             
         except Exception as e:
@@ -425,8 +477,8 @@ class RedisStore:
                     try:
                         # Extract version_id from key: session:{sid}:version:{vid}:tables
                         parts = key.split(':')
-                        if len(parts) >= 4 and parts[3] == "version":
-                            version_id = parts[4]
+                        if len(parts) >= 5 and parts[2] == "version":
+                            version_id = parts[3]
                             versions.append(version_id)
                     except Exception:
                         continue

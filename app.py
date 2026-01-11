@@ -21,14 +21,14 @@ from chatbot import render_chatbot_tab
 logger = logging.getLogger(__name__)
 
 # FastAPI endpoint configuration
-FASTAPI_URL = "http://localhost:8001"
+FASTAPI_URL = "http://0.0.0.0:8001"
 UPLOAD_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/file-upload"
 HEALTH_ENDPOINT = f"{FASTAPI_URL}/health"
 CONFIG_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/config"
 SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 # MCP Configuration
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp")
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")  # Fallback to gpt-4o if gpt-5.1 not available
 
