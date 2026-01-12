@@ -38,64 +38,171 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 
 ## 🏗 Architecture
 
+### System Architecture Overview
+
+```mermaid
+graph TB
+    subgraph "Frontend Layer"
+        UI[Streamlit UI<br/>app.py]
+        UT[Upload Tab]
+        MT[Data Manipulation Tab]
+        VT[Visualization Tab]
+        CT[Chatbot Tab]
+        
+        UI --> UT
+        UI --> MT
+        UI --> VT
+        UI --> CT
+    end
+    
+    subgraph "Backend Layer"
+        API[FastAPI Server<br/>main.py]
+        ING[Ingestion Module]
+        REDIS[Redis Store<br/>Upstash Redis]
+        
+        API --> ING
+        API --> REDIS
+    end
+    
+    subgraph "Data Processing Layer"
+        MCP[MCP Server<br/>data-mcp/]
+        MCPC[MCP Client<br/>mcp_client.py]
+        BOT[Chatbot Module<br/>chatbot/]
+        
+        MCP --> MCPC
+        MCPC --> BOT
+    end
+    
+    subgraph "AI Layer"
+        LLM[OpenAI GPT-4/5<br/>LangChain]
+        TOOLS[18+ Data Tools]
+        
+        LLM --> TOOLS
+    end
+    
+    UI -->|HTTP Requests| API
+    MT -->|Natural Language Query| MCPC
+    CT -->|Chat Query| BOT
+    VT -->|Chart Request| REDIS
+    ING -->|Store Data| REDIS
+    MCPC -->|Tool Calls| MCP
+    BOT -->|DataFrame Query| LLM
+    MCP -->|CRUD Operations| REDIS
+    
+    style UI fill:#e1f5ff
+    style API fill:#fff4e1
+    style REDIS fill:#ffe1e1
+    style MCP fill:#e1ffe1
+    style LLM fill:#f0e1ff
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Streamlit Frontend (app.py)              │
-│  ┌──────────────┐  ┌──────────────────┐  ┌──────────────┐ │
-│  │ Upload Tab   │  │ Data Manipulation│  │ Visualization│ │
-│  │ - File UI    │  │ - NL Query Input │  │ - Chart Types │ │
-│  │ - Preview    │  │ - Operation Hist │  │ - Interactive │ │
-│  └──────────────┘  │ - Data Preview   │  │ - Export      │ │
-│                    └──────────────────┘  └──────────────┘ │
-│  ┌──────────────────────────────────────────────────────┐ │
-│  │ Chatbot Tab                                          │ │
-│  │ - Conversational Interface                          │ │
-│  │ - Auto Visualization Detection                      │ │
-│  │ - Context-Aware Responses                           │ │
-│  │ - Session History Management                        │ │
-│  └──────────────────────────────────────────────────────┘ │
-└───────────────────────────┬───────────────────────────────┘
-                            │ HTTP Requests
-┌───────────────────────────▼───────────────────────────────┐
-│              FastAPI Backend (main.py)                    │
-│  ┌──────────────────┐  ┌──────────────────────────────┐ │
-│  │ Ingestion API    │  │ Session Management API        │ │
-│  │ - File Upload    │  │ - Get/Update Sessions         │ │
-│  │ - Processing     │  │ - Metadata                    │ │
-│  └──────────────────┘  └──────────────────────────────┘ │
-└───────────┬──────────────────────┬───────────────────────┘
-            │                       │
-    ┌───────▼────────┐      ┌───────▼────────┐
-    │ Ingestion      │      │ Redis Store   │
-    │ Module        │      │ (redis_db)    │
-    │ - CSV/Excel   │      │ - Sessions    │
-    │ - PDF/Images  │      │ - TTL Mgmt    │
-    └───────┬────────┘      └───────────────┘
-            │                       │
-            └───────────┬───────────┘
-                        │
-            ┌───────────▼───────────┐
-            │   MCP Server          │
-            │   (data-mcp/)         │
-            │   - Pandas Tools      │
-            │   - Data Operations   │
-            └───────────┬───────────┘
-                        │
-            ┌───────────▼───────────┐
-            │   MCP Client          │
-            │   (mcp_client.py)     │
-            │   - LangChain Agent   │
-            │   - OpenAI LLM        │
-            └───────────────────────┘
-                        │
-            ┌───────────▼───────────┐
-            │   Chatbot Module      │
-            │   (chatbot/)          │
-            │   - LangChain Agent   │
-            │   - Pandas DF Agent   │
-            │   - LangGraph Memory  │
-            │   - Viz Detection     │
-            └───────────────────────┘
+
+### Data Flow Diagram
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Streamlit
+    participant FastAPI
+    participant Redis
+    participant MCP
+    participant LLM
+    
+    User->>Streamlit: 1. Upload File
+    Streamlit->>FastAPI: POST /api/ingestion/file-upload
+    FastAPI->>FastAPI: Process File (CSV/Excel/PDF/Image)
+    FastAPI->>Redis: Store DataFrame + Metadata
+    Redis-->>FastAPI: Session ID
+    FastAPI-->>Streamlit: Session ID + Preview
+    Streamlit-->>User: Display Tables
+    
+    User->>Streamlit: 2. Enter Query ("remove rows where price > 100")
+    Streamlit->>MCP: analyze_data(session_id, query)
+    MCP->>LLM: Process Natural Language
+    LLM->>MCP: Tool Selection (filter_rows)
+    MCP->>Redis: Load DataFrame
+    Redis-->>MCP: DataFrame
+    MCP->>MCP: Apply Transformation
+    MCP->>Redis: Save Updated DataFrame
+    MCP-->>Streamlit: Success + Summary
+    Streamlit-->>User: Show Results
+    
+    User->>Streamlit: 3. Chat Query ("show distribution of sales")
+    Streamlit->>LLM: Pandas Agent Query
+    LLM->>Redis: Load DataFrame
+    Redis-->>LLM: DataFrame
+    LLM->>LLM: Analyze + Detect Visualization
+    LLM-->>Streamlit: Text Response + Chart Config
+    Streamlit-->>User: Display Answer + Chart
+```
+
+### Session Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Created: File Upload
+    Created --> Active: Data Stored in Redis
+    Active --> Active: Operations (extend TTL)
+    Active --> Extended: User Activity
+    Extended --> Active: Continue Work
+    Active --> Expired: 30min Inactivity
+    Active --> Deleted: Manual Delete
+    Expired --> [*]: Auto Cleanup
+    Deleted --> [*]: Immediate Cleanup
+    
+    note right of Active
+        All keys synchronized:
+        - session:tables
+        - session:metadata
+        - session:graph
+        - session:versions
+    end note
+    
+    note right of Expired
+        Redis TTL triggers:
+        - Delete all keys
+        - No orphans
+    end note
+```
+
+### Component Interaction Map
+
+```mermaid
+graph LR
+    subgraph "Ingestion Pipeline"
+        F[File Upload] --> IH[Ingestion Handler]
+        IH --> CSV[CSV Handler]
+        IH --> XLS[Excel Handler]
+        IH --> PDF[PDF Handler<br/>Docling]
+        IH --> IMG[Image Handler<br/>OCR]
+        
+        CSV --> DF[DataFrames]
+        XLS --> DF
+        PDF --> DF
+        IMG --> DF
+    end
+    
+    subgraph "Storage Layer"
+        DF --> SER[Serializer]
+        SER --> RED[(Redis<br/>Upstash)]
+        RED --> KEYS[Key Structure]
+        KEYS --> ST[session:tables]
+        KEYS --> SM[session:metadata]
+        KEYS --> SG[session:graph]
+        KEYS --> SV[session:versions]
+    end
+    
+    subgraph "Processing Layer"
+        RED --> LOAD[Load Session]
+        LOAD --> AGENT[LangChain Agent]
+        AGENT --> TOOLS[MCP Tools]
+        TOOLS --> OPS[Data Operations]
+        OPS --> RED
+    end
+    
+    style F fill:#4CAF50
+    style RED fill:#FF5722
+    style AGENT fill:#2196F3
+    style TOOLS fill:#FFC107
 ```
 
 ## ✨ Features
@@ -105,6 +212,88 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 - **Excel**: Multi-sheet support (.xlsx, .xls, .xlsm)
 - **PDF**: Table extraction with layout preservation (Docling)
 - **Images**: OCR-based table extraction (PNG, JPEG, TIFF, BMP)
+
+#### File Ingestion Pipeline
+
+```mermaid
+flowchart TD
+    UPLOAD[File Upload] --> VALIDATE{Validate File}
+    VALIDATE -->|Size OK| DETECT{Detect File Type}
+    VALIDATE -->|Too Large| ERR_SIZE[Error: File Too Large]
+    
+    DETECT -->|.csv, .tsv| CSV[CSV Handler]
+    DETECT -->|.xlsx, .xls| EXCEL[Excel Handler]
+    DETECT -->|.pdf| PDF[PDF Handler]
+    DETECT -->|.png, .jpg| IMAGE[Image Handler]
+    DETECT -->|Unknown| ERR_TYPE[Error: Unsupported Type]
+    
+    CSV --> CSV_PARSE[Parse CSV<br/>- Detect delimiter<br/>- Detect encoding<br/>- Handle quotes]
+    EXCEL --> EXCEL_PARSE[Parse Excel<br/>- Read all sheets<br/>- Preserve names<br/>- Handle formulas]
+    PDF --> PDF_PARSE[Extract Tables<br/>- Docling OCR<br/>- Layout detection<br/>- Table extraction]
+    IMAGE --> IMG_PARSE[OCR Processing<br/>- Image preprocessing<br/>- Text extraction<br/>- Table detection]
+    
+    CSV_PARSE --> DF[DataFrames]
+    EXCEL_PARSE --> DF
+    PDF_PARSE --> DF
+    IMG_PARSE --> DF
+    
+    DF --> VALIDATE_DATA{Validate Data}
+    VALIDATE_DATA -->|Valid| SERIALIZE[Serialize<br/>Pickle + Base64]
+    VALIDATE_DATA -->|Empty/Invalid| ERR_DATA[Error: No Data]
+    
+    SERIALIZE --> REDIS[(Store in Redis)]
+    REDIS --> SESSION[Create Session<br/>session:tables<br/>session:metadata]
+    SESSION --> VERSION[Create v0 Version]
+    VERSION --> RESPONSE[Return Session ID]
+    RESPONSE --> END([Success])
+    
+    ERR_SIZE --> END
+    ERR_TYPE --> END
+    ERR_DATA --> END
+    
+    style UPLOAD fill:#4CAF50
+    style DF fill:#2196F3
+    style REDIS fill:#FF5722
+    style END fill:#4CAF50
+    style ERR_SIZE fill:#F44336
+    style ERR_TYPE fill:#F44336
+    style ERR_DATA fill:#F44336
+```
+
+#### File Format Support Matrix
+
+```mermaid
+flowchart LR
+    subgraph "Structured Data"
+        CSV[CSV/TSV<br/>✓ Delimiter detection<br/>✓ Encoding detection<br/>✓ Fast parsing]
+        EXCEL[Excel<br/>✓ Multi-sheet<br/>✓ .xlsx, .xls, .xlsm<br/>✓ Formula evaluation]
+    end
+    
+    subgraph "Semi-Structured Data"
+        PDF[PDF<br/>✓ Docling extraction<br/>✓ Layout preservation<br/>✓ Multi-page]
+        IMG[Images<br/>✓ OCR processing<br/>✓ PNG, JPEG, TIFF<br/>✓ Table detection]
+    end
+    
+    subgraph "Processing"
+        CSV --> PARSER[Smart Parser]
+        EXCEL --> PARSER
+        PDF --> OCR[OCR Engine]
+        IMG --> OCR
+        PARSER --> DF[DataFrames]
+        OCR --> DF
+    end
+    
+    subgraph "Storage"
+        DF --> SER[Serializer<br/>Pickle + Base64]
+        SER --> REDIS[(Upstash Redis<br/>TTL: 30min)]
+    end
+    
+    style CSV fill:#4CAF50
+    style EXCEL fill:#4CAF50
+    style PDF fill:#FFC107
+    style IMG fill:#FFC107
+    style REDIS fill:#FF5722
+```
 
 ### 2. Data Manipulation Tab
 - **Natural Language Queries**: Describe operations in plain English
@@ -121,6 +310,100 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 - **One-Click Exports**: PNG, SVG, and interactive HTML formats
 - **Theme-Aware**: Automatically adapts to light/dark mode
 
+#### Visualization Generation Pipeline
+
+```mermaid
+flowchart TD
+    START([User Selects Chart Options]) --> SESSION[Load Session Data]
+    SESSION --> TABLE{Select Table}
+    
+    TABLE --> CONFIG[Chart Configuration<br/>- Chart Type<br/>- X Column<br/>- Y Column<br/>- Color Column<br/>- Aggregation]
+    
+    CONFIG --> VALIDATE{Validate Columns}
+    VALIDATE -->|Invalid| ERROR[Show Error]
+    VALIDATE -->|Valid| AGG{Aggregation Needed?}
+    
+    AGG -->|Yes| GROUP[Group By X Column]
+    AGG -->|No| DIRECT[Use Raw Data]
+    
+    GROUP --> APPLY[Apply Aggregation<br/>sum, mean, count, min, max]
+    APPLY --> BUILD
+    DIRECT --> BUILD
+    
+    BUILD[Build Plotly Figure] --> TYPE{Chart Type}
+    
+    TYPE -->|Bar| BAR[px.bar]
+    TYPE -->|Line| LINE[px.line]
+    TYPE -->|Scatter| SCATTER[px.scatter]
+    TYPE -->|Area| AREA[px.area]
+    TYPE -->|Box| BOX[px.box]
+    TYPE -->|Histogram| HIST[px.histogram]
+    TYPE -->|Pie| PIE[px.pie]
+    TYPE -->|Heatmap| HEAT[px.heatmap]
+    
+    BAR --> THEME[Apply Theme]
+    LINE --> THEME
+    SCATTER --> THEME
+    AREA --> THEME
+    BOX --> THEME
+    HIST --> THEME
+    PIE --> THEME
+    HEAT --> THEME
+    
+    THEME --> RENDER[Render with Plotly]
+    RENDER --> DISPLAY[Display in Streamlit]
+    
+    DISPLAY --> EXPORT{Export?}
+    EXPORT -->|PNG| KALEIDO[Kaleido Export]
+    EXPORT -->|SVG| KALEIDO
+    EXPORT -->|HTML| HTML_EXPORT[HTML Export]
+    EXPORT -->|No| END
+    
+    KALEIDO --> END([Chart Ready])
+    HTML_EXPORT --> END
+    ERROR --> END
+    
+    style START fill:#4CAF50
+    style BUILD fill:#2196F3
+    style RENDER fill:#FF9800
+    style END fill:#4CAF50
+```
+
+#### Chart Type Decision Tree
+
+```mermaid
+flowchart TD
+    DATA[Your Data] --> Q1{What do you want to show?}
+    
+    Q1 -->|Comparison| Q2{Number of Categories}
+    Q1 -->|Trend| Q3{Time Series?}
+    Q1 -->|Distribution| Q4{Single Variable?}
+    Q1 -->|Relationship| Q5{Two Variables?}
+    Q1 -->|Part-to-Whole| Q6{Proportions?}
+    
+    Q2 -->|"< 20"| BAR[Bar Chart<br/>✓ Clear comparison<br/>✓ Easy to read]
+    Q2 -->|"> 20"| LINE[Line Chart<br/>✓ Better for many values]
+    
+    Q3 -->|Yes| LINE2[Line Chart<br/>✓ Show trends<br/>✓ Time on X-axis]
+    Q3 -->|No| AREA[Area Chart<br/>✓ Cumulative data]
+    
+    Q4 -->|Yes| HIST[Histogram<br/>✓ Distribution shape<br/>✓ Numeric data]
+    Q4 -->|No| BOX[Box Plot<br/>✓ Multiple groups<br/>✓ Outliers visible]
+    
+    Q5 -->|Yes| SCATTER[Scatter Plot<br/>✓ Correlation<br/>✓ Both numeric]
+    Q5 -->|No| HEATMAP[Heatmap<br/>✓ Many variables<br/>✓ Correlation matrix]
+    
+    Q6 -->|"< 7 slices"| PIE[Pie Chart<br/>✓ Percentage breakdown]
+    Q6 -->|"> 7 slices"| BAR2[Bar Chart<br/>✓ Better readability]
+    
+    style DATA fill:#4CAF50
+    style Q1 fill:#FFC107
+    style BAR fill:#2196F3
+    style LINE fill:#2196F3
+    style HIST fill:#2196F3
+    style SCATTER fill:#2196F3
+```
+
 ### 4. Chatbot Tab
 - **Intelligent Conversational Interface**: Ask questions about your data in natural language
 - **Context-Aware Responses**: Uses schema, statistics, and operation history for accurate answers
@@ -130,17 +413,369 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 - **LangChain Integration**: Powered by pandas dataframe agent for safe data operations
 - **Real-time Chart Generation**: Embeds Plotly charts directly in chat responses when needed
 
-### 5. Session Management
+#### Chatbot Processing Pipeline
+
+```mermaid
+flowchart TD
+    START([User Chat Query]) --> LOAD[Load Session Data]
+    LOAD --> SCHEMA[Get Schema & History]
+    SCHEMA --> DETECT{Detect Visualization Need}
+    
+    DETECT -->|Keywords Found| VIZ_TYPE{Determine Chart Type}
+    DETECT -->|No Keywords| AGENT[Pandas DataFrame Agent]
+    
+    VIZ_TYPE -->|"distribution by/per/of"| BAR[Bar Chart]
+    VIZ_TYPE -->|"distribution"| HIST[Histogram]
+    VIZ_TYPE -->|"over time/trend"| LINE[Line Chart]
+    VIZ_TYPE -->|"correlation/vs"| SCATTER[Scatter Plot]
+    VIZ_TYPE -->|"percentage/proportion"| PIE[Pie Chart]
+    
+    BAR --> PARAMS[Extract Chart Parameters]
+    HIST --> PARAMS
+    LINE --> PARAMS
+    SCATTER --> PARAMS
+    PIE --> PARAMS
+    
+    AGENT --> CONTEXT[Build Context Prompt]
+    CONTEXT --> LLM[OpenAI LLM]
+    LLM --> RESPONSE[Generate Text Response]
+    
+    PARAMS --> CHART[Generate Plotly Chart]
+    RESPONSE --> COMBINE{Combine Results}
+    CHART --> COMBINE
+    
+    COMBINE --> FORMAT[Format Response]
+    FORMAT --> DISPLAY[Display in Chat]
+    DISPLAY --> HISTORY[Save to History]
+    HISTORY --> END([Show to User])
+    
+    style START fill:#4CAF50
+    style DETECT fill:#FFC107
+    style VIZ_TYPE fill:#FF9800
+    style CHART fill:#2196F3
+    style END fill:#4CAF50
+```
+
+#### Visualization Detection Logic
+
+```mermaid
+flowchart LR
+    QUERY[User Query] --> KEYWORDS{Check Keywords}
+    
+    KEYWORDS -->|"show, plot, chart"| EXPLICIT[Explicit Request]
+    KEYWORDS -->|"distribution"| CHECK_CAT{Categorical Indicator?}
+    KEYWORDS -->|"compare, top, rank"| COMP[Comparative → Bar]
+    KEYWORDS -->|"over time, trend"| TREND[Trend → Line]
+    KEYWORDS -->|"correlation, vs"| REL[Relationship → Scatter]
+    
+    CHECK_CAT -->|"by, per, of, across"| CAT_DIST[Categorical Distribution<br/>→ Bar Chart]
+    CHECK_CAT -->|None| NUM_DIST[Numeric Distribution<br/>→ Histogram]
+    
+    EXPLICIT --> INFER{Infer Type}
+    INFER -->|"bar, column"| BAR_OUT[Bar Chart]
+    INFER -->|"line"| LINE_OUT[Line Chart]
+    INFER -->|"scatter"| SCATTER_OUT[Scatter Plot]
+    INFER -->|"pie"| PIE_OUT[Pie Chart]
+    INFER -->|Default| DEFAULT[Bar Chart]
+    
+    COMP --> OUTPUT
+    TREND --> OUTPUT
+    REL --> OUTPUT
+    CAT_DIST --> OUTPUT
+    NUM_DIST --> OUTPUT
+    BAR_OUT --> OUTPUT
+    LINE_OUT --> OUTPUT
+    SCATTER_OUT --> OUTPUT
+    PIE_OUT --> OUTPUT
+    DEFAULT --> OUTPUT
+    
+    OUTPUT[Chart Configuration]
+    
+    style QUERY fill:#4CAF50
+    style CHECK_CAT fill:#FFC107
+    style CAT_DIST fill:#2196F3
+    style NUM_DIST fill:#FF5722
+    style OUTPUT fill:#4CAF50
+```
+
+### 5. Session Management & Version Control
 - **Automatic TTL**: Sessions expire after 30 minutes of inactivity
 - **TTL Extension**: Sessions auto-extend on access
 - **Metadata Tracking**: File names, table counts, timestamps
 - **Multi-table Support**: Handle multiple tables per session
+- **Version History**: Git-like version control for data transformations
+- **Branching**: Try multiple analysis paths without losing work
+- **Graph Visualization**: Visual representation of transformation lineage
+
+#### Data Git History - Version Graph
+
+```mermaid
+gitGraph
+    commit id: "v0: Initial Upload" tag: "1300 rows"
+    commit id: "v1: Filter Price > 5000" tag: "1150 rows"
+    commit id: "v2: Fill Missing RAM" tag: "1150 rows"
+    branch outlier-removal
+    commit id: "v3a: Remove Outliers (IQR)" tag: "1050 rows"
+    checkout main
+    branch outlier-capping
+    commit id: "v3b: Cap Outliers (95th %ile)" tag: "1150 rows"
+    commit id: "v4: Sort by Company" tag: "1150 rows"
+```
+
+#### Version Control Operations
+
+```mermaid
+flowchart TD
+    START([Data Operation]) --> CURRENT[Get Current Version]
+    CURRENT --> EXECUTE[Execute Transformation]
+    EXECUTE --> SUCCESS{Success?}
+    
+    SUCCESS -->|Yes| SNAPSHOT[Create Version Snapshot]
+    SUCCESS -->|No| ERROR[Error Handler]
+    
+    SNAPSHOT --> GEN_ID[Generate Version ID<br/>v0, v1, v2...]
+    GEN_ID --> SAVE[Save to Redis<br/>session:version:vX]
+    SAVE --> GRAPH[Update Version Graph]
+    
+    GRAPH --> NODE[Add Node<br/>version + operation]
+    NODE --> EDGE[Add Edge<br/>parent → new]
+    EDGE --> META[Update Metadata<br/>current_version]
+    
+    META --> TTL[Sync TTLs<br/>All keys expire together]
+    TTL --> END([Version Created])
+    
+    ERROR --> ROLLBACK[Rollback]
+    ROLLBACK --> END
+    
+    BRANCH([User Clicks Version]) --> LOAD_VER[Load Version Data]
+    LOAD_VER --> OVERWRITE[Overwrite Current Session]
+    OVERWRITE --> SET_CURRENT[Set as Current Version]
+    SET_CURRENT --> BRANCH_END([Branch Created])
+    
+    style START fill:#4CAF50
+    style SNAPSHOT fill:#2196F3
+    style GRAPH fill:#FF9800
+    style BRANCH fill:#9C27B0
+    style BRANCH_END fill:#9C27B0
+```
+
+#### Session Storage Structure
+
+```mermaid
+erDiagram
+    SESSION ||--o{ VERSION : has
+    SESSION ||--|| METADATA : contains
+    SESSION ||--|| GRAPH : tracks
+    SESSION ||--o{ TABLE : stores
+    
+    SESSION {
+        string session_id PK
+        int ttl_seconds
+        timestamp created_at
+        timestamp last_accessed
+    }
+    
+    VERSION {
+        string version_id PK
+        string session_id FK
+        string parent_version
+        string operation
+        string query
+        timestamp created_at
+        blob dataframes
+    }
+    
+    METADATA {
+        string session_id FK
+        string file_name
+        string file_type
+        int table_count
+        string current_version
+    }
+    
+    GRAPH {
+        string session_id FK
+        json nodes
+        json edges
+    }
+    
+    TABLE {
+        string table_name PK
+        string session_id FK
+        int row_count
+        int column_count
+        json schema
+        blob data
+    }
+```
 
 ### 6. MCP Integration
 - **18+ Data Tools**: Filter, sort, clean, transform operations
 - **Safe Execution**: Tool-based approach prevents code injection
 - **Tool Tracking**: See which tools are used for each operation
 - **Error Handling**: Graceful error recovery
+
+#### MCP Tool Execution Flow
+
+```mermaid
+flowchart TD
+    START([User Query]) --> PARSE[LLM Parses Query]
+    PARSE --> SELECT{Select Tools}
+    
+    SELECT -->|Core| INIT[initialize_data_table]
+    SELECT -->|Cleaning| CLEAN[drop_rows, fill_missing, etc.]
+    SELECT -->|Selection| SEL[select_columns, filter_rows]
+    SELECT -->|Transform| TRANS[rename_columns, sort_data]
+    
+    INIT --> LOAD[Load from Redis]
+    CLEAN --> LOAD
+    SEL --> LOAD
+    TRANS --> LOAD
+    
+    LOAD --> EXECUTE[Execute Operation]
+    EXECUTE --> VALIDATE{Validation}
+    
+    VALIDATE -->|Success| SAVE[Save to Redis]
+    VALIDATE -->|Error| ERROR[Error Handler]
+    
+    SAVE --> VERSION[Create Version Snapshot]
+    VERSION --> GRAPH[Update Version Graph]
+    GRAPH --> RESPONSE[Return Success]
+    
+    ERROR --> ROLLBACK[Rollback Changes]
+    ROLLBACK --> RESPONSE
+    
+    RESPONSE --> END([Response to User])
+    
+    style START fill:#4CAF50
+    style END fill:#4CAF50
+    style VALIDATE fill:#FFC107
+    style ERROR fill:#F44336
+    style VERSION fill:#2196F3
+```
+
+#### Available MCP Tools Categories
+
+```mermaid
+mindmap
+  root((MCP Tools))
+    Core Operations
+      initialize_data_table
+      get_table_summary
+      list_tables
+      undo_operation
+      redo_operation
+    Data Cleaning
+      drop_rows_from_table
+      fill_missing_values
+      drop_missing_values
+      replace_table_values
+      clean_string_columns
+      remove_outliers_from_table
+    Selection
+      select_table_columns
+      filter_table_rows
+      sample_table_rows
+    Transformation
+      rename_table_columns
+      reorder_table_columns
+      sort_table_data
+      apply_custom_function
+    Aggregation
+      group_and_aggregate
+      pivot_table
+      crosstab_analysis
+    Feature Engineering
+      create_derived_column
+      bin_numeric_column
+      encode_categorical
+```
+
+## 🌐 Deployment Architecture
+
+### Local Development Setup
+
+```mermaid
+flowchart LR
+    subgraph "Development Machine"
+        subgraph "Terminal 1"
+            MCP[MCP Server<br/>:8000]
+        end
+        subgraph "Terminal 2"
+            API[FastAPI<br/>:8001]
+        end
+        subgraph "Terminal 3"
+            UI[Streamlit<br/>:8501]
+        end
+    end
+    
+    subgraph "Cloud Services"
+        REDIS[(Upstash Redis<br/>Cloud Storage)]
+        OPENAI[OpenAI API<br/>GPT-4/5]
+    end
+    
+    UI <-->|HTTP| API
+    UI <-->|MCP| MCP
+    API <-->|REST| REDIS
+    MCP <-->|REST| REDIS
+    MCP <-->|API| OPENAI
+    
+    style MCP fill:#4CAF50
+    style API fill:#2196F3
+    style UI fill:#FF9800
+    style REDIS fill:#FF5722
+    style OPENAI fill:#9C27B0
+```
+
+### Production Deployment Options
+
+```mermaid
+flowchart TD
+    subgraph "Option 1: Single Server"
+        NGINX[Nginx<br/>Reverse Proxy]
+        NGINX --> UI1[Streamlit :8501]
+        NGINX --> API1[FastAPI :8001]
+        NGINX --> MCP1[MCP Server :8000]
+    end
+    
+    subgraph "Option 2: Microservices"
+        LB[Load Balancer]
+        LB --> UI2[Streamlit<br/>Multiple Instances]
+        LB --> API2[FastAPI<br/>Auto-scaling]
+        LB --> MCP2[MCP Server<br/>Worker Pool]
+    end
+    
+    subgraph "Option 3: Serverless"
+        EDGE[Edge Functions]
+        EDGE --> LAMBDA[Lambda/Cloud Functions<br/>FastAPI + MCP]
+        EDGE --> STATIC[Static Streamlit<br/>CDN Distribution]
+    end
+    
+    subgraph "Shared Infrastructure"
+        REDIS2[(Upstash Redis<br/>Serverless)]
+        OPENAI2[OpenAI API]
+        MONITORING[Monitoring<br/>Logs & Metrics]
+    end
+    
+    UI1 -.->|Data| REDIS2
+    API1 -.->|Data| REDIS2
+    MCP1 -.->|Data| REDIS2
+    
+    UI2 -.->|Data| REDIS2
+    API2 -.->|Data| REDIS2
+    MCP2 -.->|Data| REDIS2
+    
+    LAMBDA -.->|Data| REDIS2
+    STATIC -.->|Data| REDIS2
+    
+    MCP1 -.->|AI| OPENAI2
+    MCP2 -.->|AI| OPENAI2
+    LAMBDA -.->|AI| OPENAI2
+    
+    style LB fill:#FFC107
+    style REDIS2 fill:#FF5722
+    style OPENAI2 fill:#9C27B0
+```
 
 ## 🚀 Installation
 
@@ -692,6 +1327,106 @@ python mcp_client.py {session_id} "show me the first 5 rows"
 3. Tool automatically available to LangChain agent
 
 ## 🐛 Troubleshooting
+
+### Diagnostic Flowchart
+
+```mermaid
+flowchart TD
+    START{System Not Working?} --> CHECK1{Streamlit Loading?}
+    
+    CHECK1 -->|No| CHECK_API{FastAPI Running?}
+    CHECK1 -->|Yes| CHECK_UPLOAD{Can Upload Files?}
+    
+    CHECK_API -->|No| START_API[Start FastAPI<br/>python main.py<br/>Port 8001]
+    CHECK_API -->|Yes| CHECK_REDIS{Redis Connected?}
+    
+    CHECK_REDIS -->|No| FIX_REDIS[Check .env<br/>UPSTASH_REDIS_REST_URL<br/>UPSTASH_REDIS_REST_TOKEN]
+    CHECK_REDIS -->|Yes| CHECK_PORT[Check Port Conflicts<br/>lsof -i :8001]
+    
+    CHECK_UPLOAD -->|No| CHECK_SIZE{File Too Large?}
+    CHECK_UPLOAD -->|Yes| CHECK_MANIP{Can Manipulate Data?}
+    
+    CHECK_SIZE -->|Yes| INCREASE[Increase MAX_FILE_SIZE<br/>in ingestion/config.py]
+    CHECK_SIZE -->|No| CHECK_FORMAT{Supported Format?}
+    
+    CHECK_FORMAT -->|No| CONVERT[Convert to CSV/Excel<br/>or use PDF/Image]
+    CHECK_FORMAT -->|Yes| CHECK_LOGS[Check FastAPI Logs<br/>for Errors]
+    
+    CHECK_MANIP -->|No| CHECK_MCP{MCP Server Running?}
+    CHECK_MANIP -->|Yes| CHECK_VIZ{Visualizations Working?}
+    
+    CHECK_MCP -->|No| START_MCP[Start MCP Server<br/>cd data-mcp<br/>python data.py<br/>Port 8000]
+    CHECK_MCP -->|Yes| CHECK_KEY{OpenAI Key Set?}
+    
+    CHECK_KEY -->|No| SET_KEY[Set OPENAI_API_KEY<br/>in .env]
+    CHECK_KEY -->|Yes| CHECK_SESSION{Session Expired?}
+    
+    CHECK_SESSION -->|Yes| REUPLOAD[Re-upload File<br/>Sessions expire after 30min]
+    CHECK_SESSION -->|No| CHECK_NETWORK[Check Network<br/>MCP → FastAPI Connection]
+    
+    CHECK_VIZ -->|No| CHECK_DATA{Session Has Data?}
+    CHECK_VIZ -->|Yes| CHECK_CHAT{Chatbot Working?}
+    
+    CHECK_DATA -->|No| UPLOAD_FIRST[Upload File First<br/>in Upload Tab]
+    CHECK_DATA -->|Yes| CHECK_COLUMNS[Check Column Selection<br/>Valid X/Y columns?]
+    
+    CHECK_CHAT -->|No| CHECK_PANDAS{pandas-agent Error?}
+    CHECK_CHAT -->|Yes| DONE[✅ System Healthy!]
+    
+    CHECK_PANDAS -->|Yes| INSTALL[Install Dependencies<br/>pip install langchain-experimental]
+    CHECK_PANDAS -->|No| CHECK_HISTORY[Clear Chat History<br/>Try New Session]
+    
+    START_API --> VERIFY_API[Verify: curl localhost:8001/health]
+    START_MCP --> VERIFY_MCP[Verify: curl localhost:8000/health]
+    FIX_REDIS --> TEST_REDIS[Test Redis Connection]
+    SET_KEY --> RESTART[Restart Servers]
+    
+    VERIFY_API --> CHECK1
+    VERIFY_MCP --> CHECK_MANIP
+    TEST_REDIS --> CHECK_API
+    RESTART --> CHECK_MANIP
+    
+    style START fill:#FFC107
+    style DONE fill:#4CAF50
+    style START_API fill:#2196F3
+    style START_MCP fill:#2196F3
+    style FIX_REDIS fill:#FF5722
+    style SET_KEY fill:#FF5722
+```
+
+### Quick Diagnostic Commands
+
+```mermaid
+flowchart LR
+    subgraph "Health Checks"
+        H1[curl localhost:8001/health]
+        H2[curl localhost:8000/health]
+        H3[curl localhost:8501]
+    end
+    
+    subgraph "Port Checks"
+        P1[lsof -i :8001<br/>FastAPI]
+        P2[lsof -i :8000<br/>MCP Server]
+        P3[lsof -i :8501<br/>Streamlit]
+    end
+    
+    subgraph "Service Status"
+        H1 -->|200 OK| S1[✅ FastAPI Running]
+        H2 -->|200 OK| S2[✅ MCP Running]
+        H3 -->|200 OK| S3[✅ Streamlit Running]
+        
+        H1 -->|Failed| E1[❌ Start FastAPI]
+        H2 -->|Failed| E2[❌ Start MCP]
+        H3 -->|Failed| E3[❌ Start Streamlit]
+    end
+    
+    style S1 fill:#4CAF50
+    style S2 fill:#4CAF50
+    style S3 fill:#4CAF50
+    style E1 fill:#F44336
+    style E2 fill:#F44336
+    style E3 fill:#F44336
+```
 
 ### Common Issues
 

@@ -49,7 +49,17 @@ class VisualizationDetector:
             return True, "line"
         
         if any(keyword in query_lower for keyword in self.DISTRIBUTION_KEYWORDS):
-            return True, "histogram"  # Will be adjusted based on data type
+            # Smart distribution detection: check if it's categorical or numeric distribution
+            # Categorical indicators: "by", "per", "of <category>", "across", "among"
+            categorical_indicators = [" by ", " per ", " of ", " across ", " among ", " for each "]
+            is_categorical_distribution = any(indicator in query_lower for indicator in categorical_indicators)
+            
+            if is_categorical_distribution:
+                # Categorical distribution -> bar chart (e.g., "distribution of sales by company")
+                return True, "bar"
+            else:
+                # Numeric distribution -> histogram (e.g., "distribution of prices")
+                return True, "histogram"
         
         if any(keyword in query_lower for keyword in self.RELATIONSHIP_KEYWORDS):
             return True, "scatter"
@@ -203,6 +213,15 @@ class VisualizationDetector:
                 config["y_col"] = numeric_mentioned[0]
             elif numeric_cols:
                 config["y_col"] = numeric_cols[0]
+            
+            # Special case: For distribution/frequency queries with categorical X
+            # If no numeric column specified, leave y_col as None for value_counts logic
+            if config["x_col"] and config["x_col"] in categorical_cols:
+                if not config["y_col"] and config["agg_func"] == "none":
+                    # This is likely a frequency/distribution query (e.g., "distribution of sales by company")
+                    # Leave y_col as None so generate_chart uses value_counts() logic
+                    # The agg_func stays as "none" since value_counts is handled automatically
+                    pass
         
         return config
     
