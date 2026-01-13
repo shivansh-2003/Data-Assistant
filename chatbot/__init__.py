@@ -1,22 +1,19 @@
 """
-Chatbot module for Data Assistant Platform.
-Provides intelligent conversational interface for data queries with visualization support.
+InsightBot - LangGraph-based chatbot for Data Assistant Platform.
+Provides intelligent conversational interface with stateful memory and visualization support.
 """
 
-from .streamlit_ui import ChatbotUI, render_chatbot_tab
-from .agent import ChatbotAgent
-from .session_loader import SessionLoader
-from .visualization_detector import VisualizationDetector
-from .response_formatter import ResponseFormatter
-from .history_manager import HistoryManager
+from .streamlit_ui import render_chatbot_tab
+from .graph import graph
+from .state import State
+from .utils.session_loader import SessionLoader, prepare_state_dataframes
 
 __all__ = [
-    "ChatbotUI",
     "render_chatbot_tab",
-    "ChatbotAgent",
+    "graph",
+    "State",
     "SessionLoader",
-    "VisualizationDetector",
-    "ResponseFormatter",
-    "HistoryManager"
+    "prepare_state_dataframes"
 ]
 
+__version__ = "2.0.0"  # InsightBot version

@@ -16,7 +16,7 @@ import logging
 import graphviz
 from datetime import datetime
 from data_visualization import render_visualization_tab
-from chatbot import render_chatbot_tab
+from chatbot.streamlit_ui import render_chatbot_tab
 
 logger = logging.getLogger(__name__)
 
