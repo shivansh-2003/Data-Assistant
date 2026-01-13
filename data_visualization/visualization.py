@@ -98,6 +98,16 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
     else:
         df_agg = df
     
+    # Validate color column exists in the aggregated DataFrame
+    if color_col and color_col != 'None' and color_col not in df_agg.columns:
+        color_col = None  # Ignore color if column doesn't exist after aggregation
+    
+    # Validate x_col and y_col exist
+    if x_col and x_col not in df_agg.columns:
+        x_col = None
+    if y_col and y_col not in df_agg.columns:
+        y_col = None
+    
     # Chart-specific generation
     try:
         if chart_type == 'bar':
@@ -110,7 +120,7 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
                 fig = px.bar(x=value_counts.index, y=value_counts.values, 
                            title=f"Bar Chart: Count by {x_col}")
             else:
-                fig = create_error_figure("Bar chart requires at least X column")
+                fig = create_error_figure(f"Bar chart requires at least X column. Available columns: {list(df_agg.columns)}")
                 
         elif chart_type == 'line':
             if y_col and y_col in df_agg.columns and x_col and x_col in df_agg.columns:
@@ -124,7 +134,7 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
                 fig = px.scatter(df_agg, x=x_col, y=y_col, color=color_col if color_col and color_col != 'None' else None,
                                title=f"Scatter: {y_col} vs {x_col}")
             else:
-                fig = create_error_figure("Scatter chart requires both X and Y columns")
+                fig = create_error_figure(f"Scatter chart requires both X and Y columns. Available columns: {list(df_agg.columns)}")
                 
         elif chart_type == 'area':
             if y_col and y_col in df_agg.columns and x_col and x_col in df_agg.columns:
@@ -146,7 +156,7 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
                 fig = px.histogram(df_agg, x=x_col, color=color_col if color_col and color_col != 'None' else None,
                                  title=f"Histogram: Distribution of {x_col}")
             else:
-                fig = create_error_figure("Histogram requires X column")
+                fig = create_error_figure(f"Histogram requires X column. Available columns: {list(df_agg.columns)}")
                 
         elif chart_type == 'pie':
             if y_col and y_col in df_agg.columns:
