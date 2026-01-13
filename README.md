@@ -30,11 +30,15 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 
 - **Backend**: FastAPI (REST API)
 - **Frontend**: Streamlit (Web UI)
-- **Data Storage**: Upstash Redis (Cloud Redis)
-- **AI/ML**: LangChain, LangGraph, OpenAI GPT models, LangChain Experimental (pandas agent)
-- **Data Processing**: Pandas, Docling
-- **Visualization**: Plotly, Kaleido (for static exports)
-- **MCP Server**: FastMCP for tool-based operations
+- **Data Storage**: Upstash Redis (Cloud Redis with TTL management)
+- **AI/ML**: 
+  - LangChain (Agent framework, tool integration)
+  - LangGraph (Stateful conversation flow, MemorySaver checkpointing)
+  - OpenAI GPT-4o/GPT-5 (Intent classification, code generation, summarization)
+  - LangChain Experimental (pandas dataframe agent)
+- **Data Processing**: Pandas, Docling (PDF extraction), NumPy
+- **Visualization**: Plotly (interactive charts), Kaleido (PNG/SVG export)
+- **MCP Server**: FastMCP for tool-based data operations
 
 ## 🏗 Architecture
 
@@ -404,56 +408,145 @@ flowchart TD
     style SCATTER fill:#2196F3
 ```
 
-### 4. Chatbot Tab
-- **Intelligent Conversational Interface**: Ask questions about your data in natural language
-- **Context-Aware Responses**: Uses schema, statistics, and operation history for accurate answers
-- **Smart Visualization Detection**: Automatically detects when charts are needed and generates appropriate visualizations
-- **Session History Management**: Maintains conversation context within session boundaries using LangGraph checkpointer
-- **Multi-Query Support**: Handles statistical, comparative, exploratory, and debugging queries
-- **LangChain Integration**: Powered by pandas dataframe agent for safe data operations
-- **Real-time Chart Generation**: Embeds Plotly charts directly in chat responses when needed
+### 4. InsightBot - Intelligent Chatbot Tab
+- **🤖 LangGraph-Powered Architecture**: State-of-the-art conversational AI with persistent memory
+- **💬 Multi-Turn Conversations**: Maintains context across the entire conversation with memory checkpointing
+- **🧠 Context-Aware Responses**: Uses schema, statistics, and operation history for accurate answers
+- **📊 Automatic Visualization Detection**: Intelligently detects when charts are needed and generates appropriate visualizations
+- **🔧 Function Calling**: Dynamic tool selection based on query intent (statistical, comparative, visualization)
+- **🎯 Intent Classification**: Routes queries to appropriate processing nodes (analyzer, insight, visualization, responder)
+- **⚡ Safe Code Execution**: Generates and executes pandas code in sandboxed environment with timeout protection
+- **📈 Real-time Chart Generation**: Embeds interactive Plotly charts directly in chat responses
+- **🔄 Session Integration**: Seamlessly loads DataFrames from Redis for instant analysis
+- **📝 Query Types Supported**:
+  - Statistical queries (averages, counts, sums, aggregations)
+  - Comparative queries (compare X by Y, rankings, differences)
+  - Filtering & sorting (list items matching criteria, top N)
+  - Visualization requests (explicit and implicit chart generation)
+  - Exploratory queries (patterns, correlations, distributions)
+  - Debugging queries (operation history, schema inspection)
 
-#### Chatbot Processing Pipeline
+#### InsightBot LangGraph Architecture
 
 ```mermaid
 flowchart TD
-    START([User Chat Query]) --> LOAD[Load Session Data]
-    LOAD --> SCHEMA[Get Schema & History]
-    SCHEMA --> DETECT{Detect Visualization Need}
+    START([User Query]) --> ENTRY[Entry Point]
+    ENTRY --> ROUTER[Router Node<br/>Intent Classification]
     
-    DETECT -->|Keywords Found| VIZ_TYPE{Determine Chart Type}
-    DETECT -->|No Keywords| AGENT[Pandas DataFrame Agent]
+    ROUTER --> CLASSIFY{Classify Intent}
+    CLASSIFY -->|data_query| ANALYZER[Analyzer Node<br/>Tool Selection]
+    CLASSIFY -->|visualization_request| ANALYZER
+    CLASSIFY -->|small_talk| RESPONDER[Responder Node]
     
-    VIZ_TYPE -->|"distribution by/per/of"| BAR[Bar Chart]
-    VIZ_TYPE -->|"distribution"| HIST[Histogram]
-    VIZ_TYPE -->|"over time/trend"| LINE[Line Chart]
-    VIZ_TYPE -->|"correlation/vs"| SCATTER[Scatter Plot]
-    VIZ_TYPE -->|"percentage/proportion"| PIE[Pie Chart]
+    ANALYZER --> SELECT{Select Tools}
+    SELECT -->|insight_tool| INSIGHT[Insight Node]
+    SELECT -->|chart_tool| VIZ[Visualization Node]
+    SELECT -->|both| BOTH[Both Nodes]
     
-    BAR --> PARAMS[Extract Chart Parameters]
-    HIST --> PARAMS
-    LINE --> PARAMS
-    SCATTER --> PARAMS
-    PIE --> PARAMS
+    INSIGHT --> GENERATE[Generate Pandas Code<br/>LLM Code Generator]
+    GENERATE --> EXECUTE[Safe Code Execution<br/>ThreadPoolExecutor]
+    EXECUTE --> SUCCESS{Success?}
     
-    AGENT --> CONTEXT[Build Context Prompt]
-    CONTEXT --> LLM[OpenAI LLM]
-    LLM --> RESPONSE[Generate Text Response]
+    SUCCESS -->|Yes| SUMMARIZE[Summarize Results<br/>LLM Summarizer]
+    SUCCESS -->|No| ERROR[Error Handler]
     
-    PARAMS --> CHART[Generate Plotly Chart]
-    RESPONSE --> COMBINE{Combine Results}
-    CHART --> COMBINE
+    SUMMARIZE --> CHECK_VIZ{Visualization Needed?}
+    CHECK_VIZ -->|Yes| VIZ
+    CHECK_VIZ -->|No| RESPONDER
     
-    COMBINE --> FORMAT[Format Response]
-    FORMAT --> DISPLAY[Display in Chat]
-    DISPLAY --> HISTORY[Save to History]
-    HISTORY --> END([Show to User])
+    VIZ --> LOAD[Load DataFrames<br/>from Redis]
+    LOAD --> CONFIG[Validate Chart Config<br/>Check Parameters]
+    CONFIG --> VALID{Valid?}
+    
+    VALID -->|Yes| CHART[Generate Plotly Chart]
+    VALID -->|No| SKIP[Skip Visualization]
+    
+    CHART --> RESPONDER
+    SKIP --> RESPONDER
+    ERROR --> RESPONDER
+    
+    RESPONDER --> FORMAT[Format Final Response<br/>Combine Insights + Charts]
+    FORMAT --> MEMORY[Save to Memory<br/>LangGraph Checkpointer]
+    MEMORY --> END([Display to User])
     
     style START fill:#4CAF50
-    style DETECT fill:#FFC107
-    style VIZ_TYPE fill:#FF9800
-    style CHART fill:#2196F3
+    style ROUTER fill:#9C27B0
+    style ANALYZER fill:#FF9800
+    style INSIGHT fill:#2196F3
+    style VIZ fill:#00BCD4
+    style RESPONDER fill:#4CAF50
     style END fill:#4CAF50
+```
+
+#### LangGraph State Management
+
+```mermaid
+stateDiagram-v2
+    [*] --> RouterNode: User Query
+    
+    state RouterNode {
+        [*] --> ClassifyIntent
+        ClassifyIntent --> ExtractEntities
+        ExtractEntities --> [*]
+    }
+    
+    RouterNode --> AnalyzerNode: Intent Classified
+    
+    state AnalyzerNode {
+        [*] --> LoadTools
+        LoadTools --> FunctionCalling
+        FunctionCalling --> SelectTools
+        SelectTools --> [*]
+    }
+    
+    AnalyzerNode --> InsightNode: insight_tool selected
+    AnalyzerNode --> VizNode: chart_tool selected
+    AnalyzerNode --> ResponderNode: no tools
+    
+    state InsightNode {
+        [*] --> GenerateCode
+        GenerateCode --> ExecuteCode
+        ExecuteCode --> Summarize
+        Summarize --> StoreResult
+        StoreResult --> [*]
+    }
+    
+    InsightNode --> VizNode: visualization needed
+    InsightNode --> ResponderNode: insight only
+    
+    state VizNode {
+        [*] --> LoadData
+        LoadData --> ValidateConfig
+        ValidateConfig --> GenerateChart
+        GenerateChart --> StoreChart
+        StoreChart --> [*]
+    }
+    
+    VizNode --> ResponderNode: chart generated
+    
+    state ResponderNode {
+        [*] --> CombineResults
+        CombineResults --> FormatResponse
+        FormatResponse --> SaveMemory
+        SaveMemory --> [*]
+    }
+    
+    ResponderNode --> [*]: Response Ready
+    
+    note right of RouterNode
+        Uses GPT-4o for
+        intent classification
+    end note
+    
+    note right of InsightNode
+        Safe code execution
+        with 10s timeout
+    end note
+    
+    note right of VizNode
+        Validates columns exist
+        before chart generation
+    end note
 ```
 
 #### Visualization Detection Logic
@@ -1091,18 +1184,32 @@ Data-Assistant/
 ├── app.py                      # Streamlit frontend application
 ├── main.py                     # FastAPI backend server
 ├── mcp_client.py              # MCP client with LangChain integration
+├── test_visualization_evaluation.py  # Visualization test suite
 ├── requirements.txt           # Python dependencies
 ├── README.md                  # This file
 │
-├── chatbot/                   # Chatbot module
+├── chatbot/                   # InsightBot - LangGraph-powered chatbot
 │   ├── __init__.py
-│   ├── agent.py              # LangChain agent setup and orchestration
-│   ├── session_loader.py     # Load DataFrames from Redis session
-│   ├── visualization_detector.py  # Detect visualization needs
-│   ├── history_manager.py    # Conversation history management
-│   ├── response_formatter.py # Format responses with charts
+│   ├── state.py              # LangGraph state schema (TypedDict)
+│   ├── graph.py              # StateGraph definition and compilation
 │   ├── streamlit_ui.py       # Streamlit UI components
-│   └── chatbot.md            # Chatbot architecture documentation
+│   ├── nodes/                # LangGraph nodes
+│   │   ├── router.py         # Intent classification node
+│   │   ├── analyzer.py       # Tool selection node (function calling)
+│   │   ├── insight.py        # Pandas code generation and execution
+│   │   ├── viz.py            # Visualization configuration and validation
+│   │   └── responder.py      # Response formatting and memory
+│   ├── tools/                # LangChain tools
+│   │   ├── simple_charts.py  # Bar, line, scatter, histogram tools
+│   │   └── complex_charts.py # Combo charts and dashboard tools
+│   ├── execution/            # Safe code execution
+│   │   ├── code_generator.py # LLM-based pandas code generation
+│   │   └── safe_executor.py  # Sandboxed execution with timeout
+│   ├── utils/                # Utility modules
+│   │   └── session_loader.py # Load DataFrames from Redis
+│   ├── prompts/              # LLM prompts
+│   │   └── system_prompts.py # Centralized prompts for all nodes
+│   └── INSIGHTBOT_IMPLEMENTATION.md  # Architecture documentation
 │
 ├── redis_db/                  # Redis session management
 │   ├── __init__.py
@@ -1239,33 +1346,55 @@ Data-Assistant/
 - Multi-table support with table selection
 - Dashboard builder with grid layouts and chart pinning
 
-### 6. Chatbot Module (`chatbot/`)
+### 6. InsightBot Module (`chatbot/`)
 
-**Purpose**: Intelligent conversational interface for data queries with automatic visualization detection.
+**Purpose**: Advanced LangGraph-powered conversational AI for data analysis with intelligent tool selection and visualization.
+
+**Architecture**: Multi-node state graph with persistent memory and dynamic tool routing.
 
 **Key Components**:
-- `agent.py`: LangChain pandas dataframe agent setup and orchestration
-- `session_loader.py`: Loads DataFrames and metadata from Redis sessions
-- `visualization_detector.py`: Detects when visualizations are needed and infers chart types
-- `history_manager.py`: Manages conversation history using LangGraph checkpointer
-- `response_formatter.py`: Formats responses with embedded visualizations
-- `streamlit_ui.py`: Streamlit UI components for chat interface
 
-**Key Classes**:
-- `ChatbotAgent`: Main orchestrator for processing queries
-- `SessionLoader`: Loads session data and schema information
-- `VisualizationDetector`: Analyzes queries for visualization needs
-- `HistoryManager`: Manages conversation history with LangGraph
-- `ResponseFormatter`: Formats responses with charts
-- `ChatbotUI`: Streamlit UI rendering
+**Nodes**:
+- `nodes/router.py`: Intent classification using structured LLM output
+- `nodes/analyzer.py`: Tool selection via function calling (insight_tool, chart_tools)
+- `nodes/insight.py`: Pandas code generation and safe execution
+- `nodes/viz.py`: Visualization configuration and validation
+- `nodes/responder.py`: Response formatting and memory persistence
 
-**Features**:
-- Context-aware responses using schema, statistics, and operation history
-- Automatic visualization detection (explicit and implicit)
-- Conversation history management per session
-- LangChain pandas dataframe agent for safe data operations
-- Real-time chart generation and embedding in responses
-- Support for statistical, comparative, exploratory, and debugging queries
+**Tools**:
+- `tools/simple_charts.py`: Bar, line, scatter, histogram chart tools
+- `tools/complex_charts.py`: Combo charts and dashboard tools
+- `tools/insight_tool.py`: Statistical analysis and data querying
+
+**Execution**:
+- `execution/code_generator.py`: LLM-based pandas code generation
+- `execution/safe_executor.py`: Sandboxed code execution with timeout
+
+**Utilities**:
+- `utils/session_loader.py`: Loads DataFrames and metadata from Redis
+- `prompts/system_prompts.py`: Centralized LLM prompts for all nodes
+- `state.py`: TypedDict schema for LangGraph state management
+- `graph.py`: StateGraph definition and compilation with MemorySaver
+
+**Key Features**:
+- ✅ **Stateful Conversations**: LangGraph MemorySaver for persistent multi-turn memory
+- ✅ **Intent Classification**: Automatic routing between data queries, visualizations, and small talk
+- ✅ **Function Calling**: LLM dynamically selects appropriate tools based on query
+- ✅ **Safe Code Execution**: ThreadPoolExecutor-based timeout (10s) for pandas code
+- ✅ **Parameter Extraction**: Intelligent extraction of x_col, y_col, agg_func from queries
+- ✅ **Column Validation**: Verifies columns exist before chart generation
+- ✅ **Error Handling**: Graceful fallback when visualizations or insights fail
+- ✅ **Session Integration**: Seamless loading of DataFrames from Redis store
+- ✅ **Serialization**: Handles non-serializable objects (DataFrames, Plotly figures)
+
+**Supported Query Patterns**:
+- 📊 Statistical: "What's the average Price by Company?"
+- 📈 Comparative: "Compare average Weight by Cpu_brand"
+- 🔍 Filtering: "List all laptops with Price > 11.0 and Ram=16"
+- 📉 Distribution: "Show the distribution of Weight"
+- 🎯 Visualization: "Plot average Price by Company (bar chart)"
+- 🔗 Relationship: "Visualize Ram vs. Price relationship"
+- 📦 Breakdown: "Show breakdown of Os types as percentages"
 
 ### 7. Streamlit Frontend (`app.py`)
 
@@ -1286,6 +1415,58 @@ Data-Assistant/
 - Chart export functionality
 - Conversational chatbot interface
 - Automatic visualization detection in chat
+
+## 🧪 Testing & Quality Assurance
+
+### Visualization Test Suite
+
+The platform includes a comprehensive automated test suite for evaluating visualization generation capabilities.
+
+**Test Script**: `test_visualization_evaluation.py`
+
+**Features**:
+- ✅ **Automated Testing**: Tests 10 different visualization query types
+- 📸 **Visual Proof**: Generates PNG images and interactive HTML files
+- 📊 **Beautiful Reports**: Creates HTML report with all charts embedded
+- 📈 **Pass/Fail Analysis**: Detailed results with expected vs. actual chart types
+- 🎯 **Coverage**: Bar charts, histograms, scatter plots, pie charts
+
+**Running Tests**:
+```bash
+# Run visualization tests
+python test_visualization_evaluation.py <session_id>
+
+# View results
+open viz_test_output/test_report.html
+```
+
+**Test Output Structure**:
+```
+viz_test_output/
+├── images/              # PNG images of all visualizations
+├── html/                # Interactive HTML charts
+├── test_report.html     # Main HTML report
+└── viz_test_results.json # Structured results
+```
+
+**Test Coverage**:
+1. **Bar Charts**: Compare average values across categories
+2. **Histograms**: Distribution analysis of numeric columns
+3. **Scatter Plots**: Relationship analysis between two variables
+4. **Pie Charts**: Percentage breakdown of categorical data
+
+**Success Criteria**:
+- All queries generate visualization configs
+- Parameters are correctly extracted (x_col, y_col, agg_func)
+- Charts render without errors
+- Chart types match query intent
+
+**Recent Improvements**:
+- ✅ Fixed parameter naming mismatch between tools and prompts
+- ✅ Added column validation before chart generation
+- ✅ Improved error messages showing available columns
+- ✅ Handle missing color columns gracefully after aggregation
+- ✅ Added breakdown/percentage query detection
 
 ## 🛠 Development
 
@@ -1472,15 +1653,39 @@ Error: PNG/SVG export failed
 ```
 **Solution**: Install Kaleido for static image exports: `pip install kaleido`
 
-**8. Chatbot Not Responding**
+**8. InsightBot Not Responding**
 ```
-Error: Agent execution failed
+Error: Agent execution failed / Graph invocation error
 ```
 **Solution**: 
 - Ensure `OPENAI_API_KEY` is set correctly
-- Check that `langchain-experimental` and `langgraph` are installed: `pip install langchain-experimental langgraph`
+- Check that required packages are installed: `pip install langchain langgraph langchain-openai langchain-experimental`
 - Verify session data exists (upload a file first)
-- Check that FastAPI backend is running
+- Check that FastAPI backend is running for data loading
+- Clear chat history if experiencing memory issues
+- Check console logs for specific node errors (router, analyzer, insight, viz, responder)
+
+**9. Visualization Not Generated in Chat**
+```
+Warning: Visualization skipped / Invalid viz config
+```
+**Solution**:
+- Verify column names in your query match actual column names in data
+- Check that the query includes explicit visualization keywords (plot, chart, visualize, show)
+- For filtered queries (e.g., "for Intel devices"), the filter column must exist
+- Try rephrasing the query to be more explicit: "Show a bar chart of average Price by Company"
+- Check analyzer prompt in `chatbot/prompts/system_prompts.py` for query pattern examples
+
+**10. Code Execution Timeout**
+```
+Error: Execution timed out (> 10 seconds)
+```
+**Solution**:
+- Query is too complex or dataset is very large
+- Try filtering data first to reduce size
+- Break complex query into smaller steps
+- Check for infinite loops in generated pandas code (review logs)
+- Consider increasing timeout in `chatbot/execution/safe_executor.py`
 
 ### Debug Mode
 
