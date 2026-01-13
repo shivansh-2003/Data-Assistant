@@ -39,13 +39,14 @@ def render_chatbot_tab():
         if current_state and current_state.values:
             messages = current_state.values.get("messages", [])
             viz_config = current_state.values.get("viz_config")
+            insight_data = current_state.values.get("insight_data")
             
             # Generate chart from config if present
             viz_figure = None
             if viz_config:
                 viz_figure = generate_chart_from_config_ui(viz_config, session_id)
             
-            display_message_history(messages, viz_figure)
+            display_message_history(messages, viz_figure, insight_data)
         
         # Chat input
         handle_chat_input(session_id, config)
@@ -115,9 +116,11 @@ def display_session_info(session_id: str):
         logger.warning(f"Could not load session summary: {e}")
 
 
-def display_message_history(messages: list, viz_figure=None):
-    """Display chat message history."""
-    # Track which message has the viz
+def display_message_history(messages: list, viz_figure=None, insight_data=None):
+    """Display chat message history with optional DataFrame and visualization."""
+    import pandas as pd
+    
+    # Track which message has the viz/data
     last_ai_message_idx = None
     
     for idx, msg in enumerate(messages):
@@ -130,7 +133,26 @@ def display_message_history(messages: list, viz_figure=None):
             with st.chat_message("assistant"):
                 st.write(msg.content)
     
-    # Display visualization after the last AI message
+    # Display DataFrame if present (for filtering/listing queries)
+    if insight_data is not None and last_ai_message_idx is not None:
+        if insight_data.get("type") == "dataframe":
+            with st.chat_message("assistant"):
+                # Convert back to DataFrame for display
+                df = pd.DataFrame(insight_data["data"])
+                
+                # Show shape info
+                rows, cols = insight_data["shape"]
+                st.caption(f"📊 Showing {rows} rows × {cols} columns")
+                
+                # Display with fixed height and scrolling
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    height=min(400, (rows + 1) * 35 + 3),  # Max 400px, auto-adjust for small results
+                    hide_index=True
+                )
+    
+    # Display visualization after the DataFrame
     if viz_figure is not None and last_ai_message_idx is not None:
         with st.chat_message("assistant"):
             st.plotly_chart(viz_figure, use_container_width=True, key=f"viz_{last_ai_message_idx}")

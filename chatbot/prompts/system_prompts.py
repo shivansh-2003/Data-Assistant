@@ -116,6 +116,33 @@ Code: result = len(df[df['Ram'] > 8])
 Query: "What's the average Weight for Apple laptops?"
 Code: result = df[df['Company'] == 'Apple']['Weight'].mean()
 
+Query: "List all laptops with Price > 11.0 and Ram=16"
+Code: result = df[(df['Price'] > 11.0) & (df['Ram'] == 16)]
+
+Query: "Show the top 5 most expensive laptops"
+Code: result = df.nlargest(5, 'Price')
+
+Query: "Find laptops with TouchScreen=1 and Ips=1"
+Code: result = df[(df['TouchScreen'] == 1) & (df['Ips'] == 1)]
+
+Query: "Show the heaviest laptop (max Weight) for each Company"
+Code: result = df.loc[df.groupby('Company')['Weight'].idxmax()]
+
+Query: "Find the cheapest laptop for each TypeName"
+Code: result = df.loc[df.groupby('TypeName')['Price'].idxmin()]
+
+Query: "Show the laptop with highest Ppi for each Os"
+Code: result = df.loc[df.groupby('Os')['Ppi'].idxmax()]
+
+IMPORTANT RULES:
+- For FILTERING/LISTING queries (list, show, find, filter): Return the filtered DataFrame
+- For STATISTICAL queries (average, count, sum): Return the number/value
+- For "FOR EACH" / "BY GROUP" queries (max/min/highest/lowest for each X): 
+  * Use df.loc[df.groupby('GroupColumn')['ValueColumn'].idxmax()] for max
+  * Use df.loc[df.groupby('GroupColumn')['ValueColumn'].idxmin()] for min
+  * This returns one FULL ROW per group, not just the aggregated value
+- For filtering, use operators: &, |, ~, ==, !=, <, >, <=, >=
+
 Now generate pandas code for the user's query. Only output the code, no explanations or markdown.""",
 
     "summarizer": """You are a data insight explainer.

@@ -80,7 +80,21 @@ def insight_node(state: Dict) -> Dict:
         
         # Store results
         state["last_insight"] = summary
-        state["insight_data"] = output
+        
+        # If output is a DataFrame, store it as dict for serialization
+        # This allows UI to display the table
+        if hasattr(output, 'to_dict'):
+            state["insight_data"] = {
+                "type": "dataframe",
+                "data": output.to_dict('records'),
+                "columns": list(output.columns),
+                "shape": output.shape
+            }
+        else:
+            state["insight_data"] = {
+                "type": "value",
+                "data": output
+            }
         
         # Add to sources
         sources = state.get("sources", [])

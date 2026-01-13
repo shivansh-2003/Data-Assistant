@@ -30,6 +30,7 @@ class State(TypedDict):
     
     # Results (serializable only)
     last_insight: Optional[str]  # Text insight from pandas analysis
+    insight_data: Optional[Dict[str, Any]]  # DataFrame as dict (for filtering queries) or value
     viz_config: Optional[Dict[str, Any]]  # Chart configuration (not the figure itself)
     viz_type: Optional[str]  # Chart type
     
