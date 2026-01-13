@@ -30,17 +30,22 @@ def responder_node(state: Dict) -> Dict:
         # Handle small talk
         if intent == "small_talk":
             response_text = generate_small_talk_response(query)
-        # Handle errors
-        elif state.get("error"):
+        # Handle critical errors (but not viz failures)
+        elif state.get("error") and not state.get("last_insight"):
+            # Only show error if we have no insights to show
             response_text = f"I encountered an issue: {state['error']}. Could you try rephrasing your question?"
         # Handle data queries
         else:
             insight = state.get("last_insight", "")
-            has_viz = state.get("viz_figure") is not None
+            viz_config = state.get("viz_config")
+            
+            # Check if visualization was successfully created
+            has_viz = viz_config is not None
             
             if insight and has_viz:
                 response_text = f"{insight}\n\nI've created a visualization to help illustrate this."
             elif insight:
+                # Have insight, no viz - that's fine!
                 response_text = insight
             elif has_viz:
                 response_text = "Here's a visualization of your data based on your request."

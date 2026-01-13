@@ -36,8 +36,17 @@ def insight_node(state: Dict) -> Dict:
         last_message = messages[-1]
         query = last_message.content if hasattr(last_message, 'content') else str(last_message)
         
-        df_dict = state.get("df_dict", {})
+        session_id = state.get("session_id")
         schema = state.get("schema", {})
+        
+        # Load DataFrames from Redis
+        from ..utils.session_loader import SessionLoader
+        loader = SessionLoader()
+        try:
+            df_dict = loader.load_session_dataframes(session_id)
+        except Exception as e:
+            state["error"] = f"Could not load data: {str(e)}"
+            return state
         
         if not df_dict:
             state["error"] = "No data available for analysis"

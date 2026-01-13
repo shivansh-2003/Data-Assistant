@@ -1,32 +1,28 @@
-"""Safe pandas code execution using LangChain pandas agent."""
+"""Safe pandas code execution without signals (Streamlit-compatible)."""
 
 import logging
 from typing import Dict, Any
 import pandas as pd
-import signal
-import os
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+import time
 
 logger = logging.getLogger(__name__)
 
 
-class TimeoutException(Exception):
-    """Exception raised when code execution times out."""
-    pass
+def _execute_code_in_thread(code: str, safe_globals: Dict, locals_dict: Dict) -> Any:
+    """Execute code in a thread-safe manner."""
+    exec(code, safe_globals, locals_dict)
+    return locals_dict.get('result')
 
 
-def timeout_handler(signum, frame):
-    """Signal handler for timeout."""
-    raise TimeoutException("Code execution timed out")
-
-
-def execute_pandas_code(code: str, dfs: Dict[str, pd.DataFrame], timeout: int = 5) -> Dict[str, Any]:
+def execute_pandas_code(code: str, dfs: Dict[str, pd.DataFrame], timeout: int = 10) -> Dict[str, Any]:
     """
-    Execute pandas code safely with timeout.
+    Execute pandas code safely with thread-based timeout.
     
     Args:
         code: Pandas code to execute
         dfs: Dictionary of DataFrames
-        timeout: Timeout in seconds
+        timeout: Timeout in seconds (default: 10)
         
     Returns:
         Dict with success, output, and optional error
@@ -47,10 +43,14 @@ def execute_pandas_code(code: str, dfs: Dict[str, pd.DataFrame], timeout: int = 
                 "str": str,
                 "list": list,
                 "dict": dict,
+                "tuple": tuple,
+                "set": set,
                 "range": range,
                 "enumerate": enumerate,
                 "zip": zip,
                 "sorted": sorted,
+                "any": any,
+                "all": all,
                 "print": print,
             }
         }
@@ -64,37 +64,27 @@ def execute_pandas_code(code: str, dfs: Dict[str, pd.DataFrame], timeout: int = 
         if len(dfs) == 1:
             locals_dict['df'] = list(dfs.values())[0]
         
-        # Set timeout (Unix-based systems only)
-        if hasattr(signal, 'SIGALRM'):
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(timeout)
-        
-        try:
-            # Execute code
-            exec(code, safe_globals, locals_dict)
-            
-            # Get result
-            result = locals_dict.get('result')
-            
-            # Cancel timeout
-            if hasattr(signal, 'SIGALRM'):
-                signal.alarm(0)
-            
-            logger.info("Code executed successfully")
-            
-            return {
-                "success": True,
-                "output": result,
-                "error": None
-            }
-            
-        except TimeoutException as e:
-            logger.error(f"Code execution timeout: {e}")
-            return {
-                "success": False,
-                "output": None,
-                "error": "Execution timed out (>5 seconds)"
-            }
+        # Execute with thread-based timeout
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_execute_code_in_thread, code, safe_globals, locals_dict)
+            try:
+                result = future.result(timeout=timeout)
+                
+                logger.info("Code executed successfully")
+                
+                return {
+                    "success": True,
+                    "output": result,
+                    "error": None
+                }
+                
+            except FuturesTimeoutError:
+                logger.error(f"Code execution timeout after {timeout}s")
+                return {
+                    "success": False,
+                    "output": None,
+                    "error": f"Execution timed out (>{timeout} seconds)"
+                }
             
     except Exception as e:
         logger.error(f"Error executing pandas code: {e}", exc_info=True)
@@ -103,8 +93,4 @@ def execute_pandas_code(code: str, dfs: Dict[str, pd.DataFrame], timeout: int = 
             "output": None,
             "error": str(e)
         }
-    finally:
-        # Ensure timeout is cancelled
-        if hasattr(signal, 'SIGALRM'):
-            signal.alarm(0)
 

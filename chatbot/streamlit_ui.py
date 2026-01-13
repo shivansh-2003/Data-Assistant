@@ -38,7 +38,12 @@ def render_chatbot_tab():
         # Display message history
         if current_state and current_state.values:
             messages = current_state.values.get("messages", [])
-            viz_figure = current_state.values.get("viz_figure")
+            viz_config = current_state.values.get("viz_config")
+            
+            # Generate chart from config if present
+            viz_figure = None
+            if viz_config:
+                viz_figure = generate_chart_from_config_ui(viz_config, session_id)
             
             display_message_history(messages, viz_figure)
         
@@ -131,6 +136,36 @@ def display_message_history(messages: list, viz_figure=None):
             st.plotly_chart(viz_figure, use_container_width=True, key=f"viz_{last_ai_message_idx}")
 
 
+def generate_chart_from_config_ui(viz_config: dict, session_id: str):
+    """Generate chart from configuration for UI display."""
+    try:
+        from data_visualization.visualization import generate_chart
+        from .utils.session_loader import SessionLoader
+        
+        loader = SessionLoader()
+        dfs = loader.load_session_dataframes(session_id)
+        
+        table_name = viz_config.get("table_name", "current")
+        if table_name not in dfs:
+            table_name = list(dfs.keys())[0]
+        
+        df = dfs[table_name]
+        
+        fig = generate_chart(
+            df=df,
+            chart_type=viz_config.get("chart_type", "bar"),
+            x_col=viz_config.get("x_col"),
+            y_col=viz_config.get("y_col"),
+            agg_func=viz_config.get("agg_func", "none"),
+            color_col=viz_config.get("color_col")
+        )
+        
+        return fig
+    except Exception as e:
+        logger.error(f"Error generating chart: {e}")
+        return None
+
+
 def handle_chat_input(session_id: str, config: dict):
     """Handle user chat input and invoke graph."""
     user_input = st.chat_input("Ask anything about your data...")
@@ -146,24 +181,22 @@ def handle_chat_input(session_id: str, config: dict):
                 # Prepare state data
                 state_data = prepare_state_dataframes(session_id, st.session_state)
                 
-                # Create input for graph
+                # Create input for graph (only serializable data)
                 inputs = {
                     "session_id": session_id,
                     "messages": [HumanMessage(content=user_input)],
-                    "df_dict": state_data["df_dict"],
                     "schema": state_data["schema"],
                     "operation_history": state_data["operation_history"],
+                    "table_names": list(state_data["df_dict"].keys()),
                     # Initialize other fields
                     "intent": None,
                     "entities": None,
                     "tool_calls": None,
                     "last_insight": None,
-                    "insight_data": None,
-                    "viz_figure": None,
+                    "viz_config": None,
                     "viz_type": None,
                     "error": None,
-                    "sources": [],
-                    "data_snippets": []
+                    "sources": []
                 }
                 
                 # Invoke graph

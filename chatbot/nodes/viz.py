@@ -2,16 +2,41 @@
 
 import logging
 from typing import Dict, Optional
-import plotly.graph_objects as go
 
 logger = logging.getLogger(__name__)
 
 
+def validate_viz_config(chart_name: str, config: Dict) -> Optional[str]:
+    """
+    Validate visualization configuration has required parameters.
+    
+    Returns:
+        Error message if invalid, None if valid
+    """
+    if chart_name == "bar_chart":
+        if not config.get("x_col"):
+            return "Bar chart requires x_col parameter"
+    
+    elif chart_name == "line_chart":
+        if not config.get("x_col") or not config.get("y_col"):
+            return "Line chart requires both x_col and y_col parameters"
+    
+    elif chart_name == "scatter_chart":
+        if not config.get("x_col") or not config.get("y_col"):
+            return "Scatter chart requires both x_col and y_col parameters"
+    
+    elif chart_name == "histogram":
+        if not config.get("column") and not config.get("x_col"):
+            return "Histogram requires column parameter"
+    
+    return None
+
+
 def viz_node(state: Dict) -> Dict:
     """
-    Execute visualization tools and generate charts.
+    Execute visualization tools and store chart configuration.
     
-    Uses existing data_visualization module via tool configurations.
+    Note: Stores config only (not figure) since figures aren't serializable.
     """
     try:
         tool_calls = state.get("tool_calls", [])
@@ -23,29 +48,33 @@ def viz_node(state: Dict) -> Dict:
         if not viz_calls:
             return state
         
-        df_dict = state.get("df_dict", {})
-        
-        if not df_dict:
-            state["error"] = "No data available for visualization"
+        session_id = state.get("session_id")
+        if not session_id:
+            logger.warning("No session_id in state for visualization")
             return state
         
         # Process first viz call (can extend to handle multiple)
         viz_call = viz_calls[0]
         viz_config = viz_call.get("args", {})
+        chart_name = viz_call.get("name", "unknown")
         
-        # Generate chart using existing visualization module
-        fig = generate_chart_from_config(viz_config, df_dict, state)
+        # Validate required parameters
+        validation_error = validate_viz_config(chart_name, viz_config)
+        if validation_error:
+            logger.warning(f"Invalid viz config: {validation_error}. Skipping visualization but continuing with insights.")
+            # Don't set error - just skip viz, insights should still be shown
+            return state
         
-        if fig is not None:
-            state["viz_figure"] = fig
-            state["viz_type"] = viz_config.get("chart_type", "unknown")
-            
-            # Add to sources
-            sources = state.get("sources", [])
-            sources.append(viz_call.get("name", "viz_tool"))
-            state["sources"] = sources
-            
-            logger.info(f"Generated {viz_config.get('chart_type')} chart")
+        # Store config (not figure - figures aren't serializable)
+        state["viz_config"] = viz_config
+        state["viz_type"] = chart_name.replace("_chart", "")
+        
+        # Add to sources
+        sources = state.get("sources", [])
+        sources.append(chart_name)
+        state["sources"] = sources
+        
+        logger.info(f"Stored config for {chart_name}: {viz_config}")
         
         return state
         
@@ -56,49 +85,6 @@ def viz_node(state: Dict) -> Dict:
         return state
 
 
-def generate_chart_from_config(config: Dict, df_dict: Dict, state: Dict) -> Optional[go.Figure]:
-    """
-    Generate Plotly figure from tool configuration.
-    
-    Args:
-        config: Chart configuration from tool
-        df_dict: Dictionary of DataFrames
-        state: Current state
-        
-    Returns:
-        Plotly Figure or None
-    """
-    try:
-        from data_visualization.visualization import generate_chart
-        
-        # Get table
-        table_name = config.get("table_name", "current")
-        if table_name not in df_dict:
-            # Use first available table
-            table_name = list(df_dict.keys())[0]
-        
-        df = df_dict[table_name]
-        
-        # Extract parameters
-        chart_type = config.get("chart_type", "bar")
-        x_col = config.get("x_col")
-        y_col = config.get("y_col")
-        agg_func = config.get("agg_func", "none")
-        color_col = config.get("color_col")
-        
-        # Generate chart using existing module
-        fig = generate_chart(
-            df=df,
-            chart_type=chart_type,
-            x_col=x_col,
-            y_col=y_col,
-            agg_func=agg_func,
-            color_col=color_col
-        )
-        
-        return fig
-        
-    except Exception as e:
-        logger.error(f"Error generating chart: {e}", exc_info=True)
-        return None
+# Note: Chart generation moved to streamlit_ui.py to avoid serialization issues
+# Charts are generated fresh from config when displaying in UI
 
