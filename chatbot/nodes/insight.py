@@ -81,16 +81,28 @@ def insight_node(state: Dict) -> Dict:
         # Store results
         state["last_insight"] = summary
         
-        # If output is a DataFrame, store it as dict for serialization
-        # This allows UI to display the table
-        if hasattr(output, 'to_dict'):
+        # Store output based on type for serialization
+        import pandas as pd
+        
+        if isinstance(output, pd.DataFrame):
+            # DataFrame: store as list of records for table display
             state["insight_data"] = {
                 "type": "dataframe",
                 "data": output.to_dict('records'),
                 "columns": list(output.columns),
                 "shape": output.shape
             }
+        elif isinstance(output, pd.Series):
+            # Series: convert to DataFrame first (for aggregations like mean by group)
+            df = output.reset_index()
+            state["insight_data"] = {
+                "type": "dataframe",
+                "data": df.to_dict('records'),
+                "columns": list(df.columns),
+                "shape": df.shape
+            }
         else:
+            # Single value: store as-is
             state["insight_data"] = {
                 "type": "value",
                 "data": output

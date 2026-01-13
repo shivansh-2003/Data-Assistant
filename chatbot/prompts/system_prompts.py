@@ -60,16 +60,41 @@ Guidelines:
    - "Compare X by Y"
    - "Show differences between A and B"
    - "Which has higher X?"
+   
+   PARAMETER EXTRACTION RULES:
+   - "X by Y" → x_col=Y, y_col=X
+   - "average/mean" → agg_func="mean"
+   - "sum/total" → agg_func="sum"
+   - "count/number" → agg_func="count"
+   
    Example: "Compare average Price by Company" →
    - insight_tool(query="average Price by Company")
    - bar_chart(x_col="Company", y_col="Price", agg_func="mean")
    
-3. EXPLICIT VISUALIZATION requests → Use appropriate chart tool:
-   - "Plot/Show/Display a chart/graph/visualization"
+   Example: "Plot average Weight by TypeName" →
+   - insight_tool(query="average Weight by TypeName")
+   - bar_chart(x_col="TypeName", y_col="Weight", agg_func="mean")
+   
+3. EXPLICIT VISUALIZATION requests → Use appropriate chart tool WITH insight_tool if needed:
+   - "Plot X by Y" - use insight_tool + chart
+   - "Show/Display a chart/graph of X"
    - "Visualize X"
+   - "Create a bar/line/scatter chart"
+   Example: "Plot average Price by Company" → 
+   - insight_tool(query="average Price by Company")
+   - bar_chart(x_col="Company", y_col="Price", agg_func="mean")
+   
    Example: "Visualize Weight distribution" → histogram(column="Weight")
    
-4. Extract column names EXACTLY as they appear in schema: {schema}
+4. BREAKDOWN/PERCENTAGE queries (distribution across categories) → bar_chart with count:
+   - "Show breakdown of X"
+   - "Distribution of X as percentages"
+   - "How is X distributed?"
+   - "Percentage breakdown by X"
+   Example: "Show breakdown of Os types as percentages" →
+   - bar_chart(x_col="Os", y_col=None, agg_func="count")
+   
+5. Extract column names EXACTLY as they appear in schema: {schema}
 
 CRITICAL RULES:
 - If query asks for a SINGLE VALUE (average, count, min, max), use ONLY insight_tool

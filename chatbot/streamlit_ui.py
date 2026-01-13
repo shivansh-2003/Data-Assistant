@@ -133,8 +133,9 @@ def display_message_history(messages: list, viz_figure=None, insight_data=None):
             with st.chat_message("assistant"):
                 st.write(msg.content)
     
-    # Display DataFrame if present (for filtering/listing queries)
-    if insight_data is not None and last_ai_message_idx is not None:
+    # Display DataFrame ONLY if there's NO visualization
+    # (For filtering/listing queries without charts)
+    if insight_data is not None and last_ai_message_idx is not None and viz_figure is None:
         if insight_data.get("type") == "dataframe":
             with st.chat_message("assistant"):
                 # Convert back to DataFrame for display
@@ -152,7 +153,7 @@ def display_message_history(messages: list, viz_figure=None, insight_data=None):
                     hide_index=True
                 )
     
-    # Display visualization after the DataFrame
+    # Display visualization (takes precedence over DataFrame)
     if viz_figure is not None and last_ai_message_idx is not None:
         with st.chat_message("assistant"):
             st.plotly_chart(viz_figure, use_container_width=True, key=f"viz_{last_ai_message_idx}")

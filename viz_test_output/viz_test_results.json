@@ -1,0 +1,109 @@
+{
+  "session_id": "ecb795f3-e66c-4af6-ac4e-926adc876632",
+  "timestamp": "2026-01-14T00:44:04.262174",
+  "total_tests": 10,
+  "passed": 9,
+  "failed": 1,
+  "test_cases": [
+    {
+      "query": "Plot average Price by Company (expect bar chart).",
+      "expected_viz_type": "bar",
+      "expected_chart": "Bar chart",
+      "viz_generated": true,
+      "actual_viz_type": "bar",
+      "error": null,
+      "image_path": "viz_test_output/images/test_01_Plot average Price by Company _expect bar chart__.png",
+      "html_path": "viz_test_output/html/test_01_Plot average Price by Company _expect bar chart__.html"
+    },
+    {
+      "query": "Compare count of laptops by TypeName (expect pie or bar chart).",
+      "expected_viz_type": "bar",
+      "expected_chart": "Bar/Pie chart",
+      "viz_generated": true,
+      "actual_viz_type": "bar",
+      "error": null,
+      "image_path": "viz_test_output/images/test_02_Compare count of laptops by TypeName _expect pie o.png",
+      "html_path": "viz_test_output/html/test_02_Compare count of laptops by TypeName _expect pie o.html"
+    },
+    {
+      "query": "Visualize average Weight by Cpu_brand (expect bar).",
+      "expected_viz_type": "bar",
+      "expected_chart": "Bar chart",
+      "viz_generated": true,
+      "actual_viz_type": "bar",
+      "error": null,
+      "image_path": "viz_test_output/images/test_03_Visualize average Weight by Cpu_brand _expect bar_.png",
+      "html_path": "viz_test_output/html/test_03_Visualize average Weight by Cpu_brand _expect bar_.html"
+    },
+    {
+      "query": "Bar chart of average HDD by Gpu_brand.",
+      "expected_viz_type": "bar",
+      "expected_chart": "Bar chart",
+      "viz_generated": true,
+      "actual_viz_type": "bar",
+      "error": null,
+      "image_path": "viz_test_output/images/test_04_Bar chart of average HDD by Gpu_brand_.png",
+      "html_path": "viz_test_output/html/test_04_Bar chart of average HDD by Gpu_brand_.html"
+    },
+    {
+      "query": "Show the distribution of Weight across all laptops (expect histogram).",
+      "expected_viz_type": "histogram",
+      "expected_chart": "Histogram",
+      "viz_generated": true,
+      "actual_viz_type": "histogram",
+      "error": null,
+      "image_path": "viz_test_output/images/test_05_Show the distribution of Weight across all laptops.png",
+      "html_path": "viz_test_output/html/test_05_Show the distribution of Weight across all laptops.html"
+    },
+    {
+      "query": "Distribution of Price for Ultrabook vs. Notebook (expect box plot).",
+      "expected_viz_type": "histogram",
+      "expected_chart": "Box plot/Histogram",
+      "viz_generated": true,
+      "actual_viz_type": "bar",
+      "error": null,
+      "image_path": "viz_test_output/images/test_06_Distribution of Price for Ultrabook vs_ Notebook _.png",
+      "html_path": "viz_test_output/html/test_06_Distribution of Price for Ultrabook vs_ Notebook _.html"
+    },
+    {
+      "query": "Visualize Ram vs. Price relationship (expect scatter plot).",
+      "expected_viz_type": "scatter",
+      "expected_chart": "Scatter plot",
+      "viz_generated": true,
+      "actual_viz_type": "scatter",
+      "error": null,
+      "image_path": "viz_test_output/images/test_07_Visualize Ram vs_ Price relationship _expect scatt.png",
+      "html_path": "viz_test_output/html/test_07_Visualize Ram vs_ Price relationship _expect scatt.html"
+    },
+    {
+      "query": "Plot Ppi vs. SSD for Intel Gpu_brand (expect scatter).",
+      "expected_viz_type": "scatter",
+      "expected_chart": "Scatter plot",
+      "viz_generated": true,
+      "actual_viz_type": "scatter",
+      "error": null,
+      "image_path": "viz_test_output/images/test_08_Plot Ppi vs_ SSD for Intel Gpu_brand _expect scatt.png",
+      "html_path": "viz_test_output/html/test_08_Plot Ppi vs_ SSD for Intel Gpu_brand _expect scatt.html"
+    },
+    {
+      "query": "Scatter plot of Weight vs. Ppi, colored by TouchScreen.",
+      "expected_viz_type": "scatter",
+      "expected_chart": "Scatter plot",
+      "viz_generated": true,
+      "actual_viz_type": "scatter",
+      "error": null,
+      "image_path": "viz_test_output/images/test_09_Scatter plot of Weight vs_ Ppi_ colored by TouchSc.png",
+      "html_path": "viz_test_output/html/test_09_Scatter plot of Weight vs_ Ppi_ colored by TouchSc.html"
+    },
+    {
+      "query": "Show breakdown of Os types as percentages (expect pie chart).",
+      "expected_viz_type": "bar",
+      "expected_chart": "Pie/Bar chart",
+      "viz_generated": false,
+      "actual_viz_type": null,
+      "error": "No visualization config in state",
+      "image_path": null,
+      "html_path": null
+    }
+  ]
+}
