@@ -221,6 +221,37 @@ def upload_file(file, file_type: str = None, session_id: str = None) -> Dict:
         return {"success": False, "error": str(e)}
 
 
+def upload_url(url: str, file_type: str = None, session_id: str = None) -> Dict:
+    """Upload a file from a URL to FastAPI endpoint."""
+    try:
+        payload = {"url": url}
+        if file_type:
+            payload["file_type"] = file_type
+        if session_id:
+            payload["session_id"] = session_id
+        response = requests.post(f"{FASTAPI_URL}/api/ingestion/url-upload", json=payload, timeout=60)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return {"success": False, "error": str(e)}
+
+
+def upload_supabase(connection_string: str, schema: str = "public",
+                    session_id: str = None, project_name: str = None) -> Dict:
+    """Import tables from Supabase using a Postgres connection string."""
+    try:
+        payload = {"connection_string": connection_string, "schema": schema}
+        if session_id:
+            payload["session_id"] = session_id
+        if project_name:
+            payload["project_name"] = project_name
+        response = requests.post(f"{FASTAPI_URL}/api/ingestion/supabase-import", json=payload, timeout=120)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return {"success": False, "error": str(e)}
+
+
 def delete_redis_session(session_id: str) -> bool:
     """Delete session data from Redis."""
     if not session_id:
@@ -362,6 +393,63 @@ def display_table_info(table_info: Dict, table_index: int):
         )
 
 
+def render_ingestion_result(result: Dict, session_id_input: Optional[str] = None):
+    """Render ingestion results for file, URL, or Supabase imports."""
+    if result.get("success"):
+        save_session_id(result.get("session_id"))
+        st.success("✅ File processed successfully!")
+        
+        metadata = result.get("metadata", {})
+        st.markdown("---")
+        st.header("📈 Processing Results")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("File Type", metadata.get("file_type", "unknown").upper())
+        with col2:
+            st.metric("Tables Found", metadata.get("table_count", 0))
+        with col3:
+            st.metric("Processing Time", f"{metadata.get('processing_time', 0)}s")
+        with col4:
+            if session_id_input:
+                st.metric("Session ID", session_id_input[:8] + "...")
+        
+        errors = metadata.get("errors", [])
+        if errors:
+            st.warning(f"⚠️ Warnings: {len(errors)} issue(s) encountered")
+            with st.expander("View Warnings"):
+                for error in errors:
+                    st.text(f"• {error}")
+        
+        st.markdown("---")
+        
+        tables = result.get("tables", [])
+        if tables:
+            st.header(f"📊 Extracted Tables ({len(tables)})")
+            
+            if len(tables) > 1:
+                tab_names = [f"Table {i+1}" for i in range(len(tables))]
+                tabs = st.tabs(tab_names)
+                
+                for idx, tab in enumerate(tabs):
+                    with tab:
+                        display_table_info(tables[idx], idx)
+            else:
+                display_table_info(tables[0], 0)
+        else:
+            st.warning("No tables found in the uploaded file.")
+    else:
+        error_msg = result.get("error", "Unknown error occurred")
+        st.error(f"❌ Failed to process file: {error_msg}")
+        st.info("Try a smaller file, or specify the file type manually.")
+        
+        metadata = result.get("metadata", {})
+        if metadata.get("errors"):
+            with st.expander("Error Details"):
+                for error in metadata["errors"]:
+                    st.text(f"• {error}")
+
+
 def initialize_session_state():
     """Initialize all session state variables."""
     if "current_session_id" not in st.session_state:
@@ -437,69 +525,7 @@ def render_upload_tab():
                 # Upload file
                 result = upload_file(uploaded_file, file_type, session_id if session_id else None)
                 
-                # Display results
-                if result.get("success"):
-                    # Store session_id for cleanup later (in both state and URL)
-                    save_session_id(result.get("session_id"))
-                    st.success("✅ File processed successfully!")
-                    
-                    # Display metadata
-                    metadata = result.get("metadata", {})
-                    st.markdown("---")
-                    st.header("📈 Processing Results")
-                    
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("File Type", metadata.get("file_type", "unknown").upper())
-                    with col2:
-                        st.metric("Tables Found", metadata.get("table_count", 0))
-                    with col3:
-                        st.metric("Processing Time", f"{metadata.get('processing_time', 0)}s")
-                    with col4:
-                        if session_id:
-                            st.metric("Session ID", session_id[:8] + "...")
-                    
-                    # Display errors if any
-                    errors = metadata.get("errors", [])
-                    if errors:
-                        st.warning(f"⚠️ Warnings: {len(errors)} issue(s) encountered")
-                        with st.expander("View Warnings"):
-                            for error in errors:
-                                st.text(f"• {error}")
-                    
-                    st.markdown("---")
-                    
-                    # Display each table
-                    tables = result.get("tables", [])
-                    if tables:
-                        st.header(f"📊 Extracted Tables ({len(tables)})")
-                        
-                        # Create tabs for each table
-                        if len(tables) > 1:
-                            tab_names = [f"Table {i+1}" for i in range(len(tables))]
-                            tabs = st.tabs(tab_names)
-                            
-                            for idx, tab in enumerate(tabs):
-                                with tab:
-                                    display_table_info(tables[idx], idx)
-                        else:
-                            # Single table - no tabs needed
-                            display_table_info(tables[0], 0)
-                    else:
-                        st.warning("No tables found in the uploaded file.")
-                
-                else:
-                    # Display error
-                    error_msg = result.get("error", "Unknown error occurred")
-                    st.error(f"❌ Failed to process file: {error_msg}")
-                    st.info("Try a smaller file, or specify the file type manually.")
-                    
-                    # Show metadata if available
-                    metadata = result.get("metadata", {})
-                    if metadata.get("errors"):
-                        with st.expander("Error Details"):
-                            for error in metadata["errors"]:
-                                st.text(f"• {error}")
+                render_ingestion_result(result, session_id_input=session_id)
     
     else:
         # No file uploaded - cleanup any existing session
@@ -528,6 +554,70 @@ def render_upload_tab():
             - Data preview and download
             - Column information and statistics
             """)
+
+    st.divider()
+    st.subheader("🌐 Upload From URL")
+    with st.expander("Import a file from a URL", expanded=False):
+        url_input = st.text_input(
+            "File URL (http/https)",
+            placeholder="https://example.com/data.csv",
+            help="Paste a direct link to a CSV, Excel, PDF, or image file"
+        )
+        url_file_type_hint = st.selectbox(
+            "File Type (Optional - Auto-detected if not specified)",
+            ["Auto-detect", "csv", "excel", "pdf", "image"],
+            key="url_file_type_hint"
+        )
+        url_file_type = None if url_file_type_hint == "Auto-detect" else url_file_type_hint
+        url_session_id = st.text_input(
+            "Session ID (Optional)",
+            key="url_session_id",
+            help="Optional session identifier for tracking"
+        )
+        if st.button("⬇️ Fetch & Process URL", key="url_upload_button", type="primary"):
+            if not url_input:
+                st.warning("Please provide a valid URL.")
+            else:
+                with st.spinner("Downloading and processing URL..."):
+                    result = upload_url(url_input, url_file_type, url_session_id if url_session_id else None)
+                    render_ingestion_result(result, session_id_input=url_session_id)
+
+    st.divider()
+    st.subheader("🧩 Import From Supabase")
+    with st.expander("Connect using Postgres connection string", expanded=False):
+        project_name = st.text_input(
+            "Project Name (Optional)",
+            key="supabase_project_name",
+            help="Helps label the session for easier tracking"
+        )
+        connection_string = st.text_input(
+            "Postgres Connection String (Required)",
+            type="password",
+            key="supabase_connection_string",
+            placeholder="postgres://user:password@db.<project>.supabase.co:5432/postgres"
+        )
+        schema_name = st.text_input(
+            "Schema (Optional)",
+            value="public",
+            key="supabase_schema"
+        )
+        supabase_session_id = st.text_input(
+            "Session ID (Optional)",
+            key="supabase_session_id",
+            help="Optional session identifier for tracking"
+        )
+        if st.button("🔗 Import Supabase Tables", key="supabase_import_button", type="primary"):
+            if not connection_string:
+                st.warning("Please provide a connection string.")
+            else:
+                with st.spinner("Connecting to Supabase and importing tables..."):
+                    result = upload_supabase(
+                        connection_string=connection_string,
+                        schema=schema_name or "public",
+                        session_id=supabase_session_id if supabase_session_id else None,
+                        project_name=project_name or None
+                    )
+                    render_ingestion_result(result, session_id_input=supabase_session_id)
 
 
 def render_manipulation_tab():

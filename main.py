@@ -17,11 +17,15 @@ import pickle
 import json
 import pandas as pd
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
+from pydantic import BaseModel
+import httpx
 
 from ingestion.ingestion_handler import IngestionHandler
 _default_handler = IngestionHandler()
 
 from ingestion.config import IngestionConfig
+from ingestion.supabase_handler import load_supabase_tables
 
 
 from redis_db import RedisStore
@@ -63,6 +67,8 @@ async def root():
         "redis_connected": _default_store.is_connected(),
         "endpoints": {
             "file_upload": "/api/ingestion/file-upload",
+            "url_upload": "/api/ingestion/url-upload",
+            "supabase_import": "/api/ingestion/supabase-import",
             "health": "/health",
             "session_create": "POST /api/session/{session_id}/upload",
             "session_tables": "GET /api/session/{session_id}/tables",
@@ -93,6 +99,97 @@ async def health_check():
 # ============================================================================
 # File Upload & Session Creation
 # ============================================================================
+
+class UrlIngestionRequest(BaseModel):
+    url: str
+    file_type: Optional[str] = None
+    session_id: Optional[str] = None
+
+
+class SupabaseIngestionRequest(BaseModel):
+    connection_string: str
+    schema: str = "public"
+    session_id: Optional[str] = None
+    project_name: Optional[str] = None
+
+
+def _build_response_and_store(
+    session_id: str,
+    result: Dict[str, Any],
+    file_name: str,
+    file_type_override: Optional[str] = None,
+    source: Optional[str] = None
+) -> Dict[str, Any]:
+    """Build response payload and persist session data to Redis."""
+    response_data = {
+        "success": result["success"],
+        "session_id": session_id,
+        "metadata": result["metadata"],
+        "tables": []
+    }
+    if file_type_override:
+        response_data["metadata"]["file_type"] = file_type_override
+    
+    if result["success"] and result["tables"]:
+        tables_dict = {}
+        for idx, df in enumerate(result["tables"]):
+            if hasattr(df, "attrs") and "sheet_name" in df.attrs:
+                table_name = df.attrs["sheet_name"]
+            elif hasattr(df, "attrs") and "table_name" in df.attrs:
+                table_name = df.attrs["table_name"]
+            elif len(result["tables"]) == 1:
+                table_name = "current"
+            else:
+                table_name = f"table_{idx}"
+            
+            tables_dict[table_name] = df
+            response_data["tables"].append({
+                "table_name": table_name,
+                "row_count": len(df),
+                "column_count": len(df.columns),
+                "columns": list(df.columns),
+                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                "preview": df.head(5).to_dict(orient="records")
+            })
+        
+        session_metadata = {
+            "file_name": file_name,
+            "file_type": response_data["metadata"]["file_type"],
+            "table_count": len(tables_dict),
+            "table_names": list(tables_dict.keys()),
+            "created_at": time.time(),
+            "processing_time": result["metadata"]["processing_time"],
+            "current_version": "v0"
+        }
+        if source:
+            session_metadata["source"] = source
+        
+        if _default_store.save_session(session_id, tables_dict, session_metadata):
+            response_data["redis_stored"] = True
+            logger.info(f"Session {session_id} stored in Redis with {len(tables_dict)} tables")
+            
+            if _default_store.save_version(session_id, "v0", tables_dict):
+                _default_store.update_graph(
+                    session_id,
+                    parent_vid=None,
+                    new_vid="v0",
+                    operation="Initial Upload",
+                    query=None
+                )
+                logger.info(f"Created initial version v0 for session {session_id}")
+        else:
+            response_data["redis_stored"] = False
+            logger.warning(f"Failed to store session {session_id} in Redis")
+    
+    return response_data
+
+
+def _generate_session_id(session_id: Optional[str]) -> str:
+    """Generate a session ID if not provided or placeholder."""
+    if not session_id or session_id.lower() == "string":
+        return str(uuid.uuid4())
+    return session_id
+
 
 @app.post("/api/ingestion/file-upload")
 async def file_upload(
@@ -125,8 +222,7 @@ async def file_upload(
             raise HTTPException(status_code=400, detail="File is empty")
         
         # Generate session_id if not provided or if placeholder value
-        if not session_id or session_id.lower() == "string":
-            session_id = str(uuid.uuid4())
+        session_id = _generate_session_id(session_id)
         
         # Save temp file
         IngestionConfig.ensure_temp_dir()
@@ -140,68 +236,12 @@ async def file_upload(
         # Process file using ingestion handler
         result = _default_handler.process_file(temp_file_path, file_type, file.content_type)
         
-        # Build response
-        response_data = {
-            "success": result["success"],
-            "session_id": session_id,
-            "metadata": result["metadata"],
-            "tables": []
-        }
-        
-        # If processing successful, store in Redis
-        if result["success"] and result["tables"]:
-            # Create tables dictionary with naming
-            tables_dict = {}
-            for idx, df in enumerate(result["tables"]):
-                # Use sheet_name from attrs if available
-                if hasattr(df, 'attrs') and 'sheet_name' in df.attrs:
-                    table_name = df.attrs['sheet_name']
-                elif len(result["tables"]) == 1:
-                    table_name = "current"
-                else:
-                    table_name = f"table_{idx}"
-                
-                tables_dict[table_name] = df
-                
-                response_data["tables"].append({
-                    "table_name": table_name,
-                    "row_count": len(df),
-                    "column_count": len(df.columns),
-                    "columns": list(df.columns),
-                    "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
-                    "preview": df.head(5).to_dict(orient="records")
-                })
-            
-            # Save to Redis
-            session_metadata = {
-                "file_name": file.filename,
-                "file_type": result["metadata"]["file_type"],
-                "table_count": len(tables_dict),
-                "table_names": list(tables_dict.keys()),
-                "created_at": time.time(),
-                "processing_time": result["metadata"]["processing_time"],
-                "current_version": "v0"
-            }
-            
-            if _default_store.save_session(session_id, tables_dict, session_metadata):
-                response_data["redis_stored"] = True
-                logger.info(f"Session {session_id} stored in Redis with {len(tables_dict)} tables")
-                
-                # Create initial version v0
-                if _default_store.save_version(session_id, "v0", tables_dict):
-                    # Initialize graph with initial node
-                    _default_store.update_graph(
-                        session_id,
-                        parent_vid=None,
-                        new_vid="v0",
-                        operation="Initial Upload",
-                        query=None
-                    )
-                    logger.info(f"Created initial version v0 for session {session_id}")
-            else:
-                response_data["redis_stored"] = False
-                logger.warning(f"Failed to store session {session_id} in Redis")
-        
+        response_data = _build_response_and_store(
+            session_id=session_id,
+            result=result,
+            file_name=file.filename,
+            source="file_upload"
+        )
         return JSONResponse(content=response_data)
         
     except HTTPException:
@@ -216,6 +256,96 @@ async def file_upload(
                 os.remove(temp_file_path)
             except Exception as e:
                 logger.warning(f"Failed to remove temp file: {e}")
+
+
+@app.post("/api/ingestion/url-upload")
+async def url_upload(request: UrlIngestionRequest):
+    """Download a file from a URL and ingest it."""
+    temp_file_path = None
+    
+    try:
+        session_id = _generate_session_id(request.session_id)
+        parsed = urlparse(request.url)
+        if parsed.scheme not in {"http", "https"}:
+            raise HTTPException(status_code=400, detail="Only http/https URLs are supported")
+        
+        IngestionConfig.ensure_temp_dir()
+        filename = os.path.basename(parsed.path) or "downloaded_file"
+        temp_file_path = os.path.join(IngestionConfig.TEMP_DIR, f"{session_id}_{filename}")
+        
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+            response = await client.get(request.url)
+            response.raise_for_status()
+            content = response.content
+        
+        if len(content) > IngestionConfig.MAX_FILE_SIZE:
+            max_mb = IngestionConfig.MAX_FILE_SIZE / (1024 * 1024)
+            raise HTTPException(
+                status_code=413,
+                detail=f"File size exceeds maximum ({max_mb}MB)"
+            )
+        if len(content) < 1:
+            raise HTTPException(status_code=400, detail="Downloaded file is empty")
+        
+        with open(temp_file_path, "wb") as f:
+            f.write(content)
+        
+        mime_type = response.headers.get("content-type")
+        result = _default_handler.process_file(temp_file_path, request.file_type, mime_type)
+        response_data = _build_response_and_store(
+            session_id=session_id,
+            result=result,
+            file_name=filename,
+            source="url_upload"
+        )
+        return JSONResponse(content=response_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing URL: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+            except Exception as e:
+                logger.warning(f"Failed to remove temp file: {e}")
+
+
+@app.post("/api/ingestion/supabase-import")
+async def supabase_import(request: SupabaseIngestionRequest):
+    """Import all tables from a Supabase project using a Postgres connection string."""
+    try:
+        session_id = _generate_session_id(request.session_id)
+        tables = load_supabase_tables(
+            connection_string=request.connection_string,
+            schema=request.schema
+        )
+        result = {
+            "success": len(tables) > 0,
+            "tables": tables,
+            "metadata": {
+                "file_type": "supabase",
+                "table_count": len(tables),
+                "processing_time": 0,
+                "errors": [] if len(tables) > 0 else [IngestionConfig.ERROR_NO_TABLES_FOUND],
+                "file_path": request.project_name or "supabase"
+            }
+        }
+        response_data = _build_response_and_store(
+            session_id=session_id,
+            result=result,
+            file_name=request.project_name or "supabase",
+            file_type_override="supabase",
+            source="supabase"
+        )
+        return JSONResponse(content=response_data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error importing Supabase tables: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================
