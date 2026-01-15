@@ -50,32 +50,21 @@ def extract_tables_with_docling(file_path: str) -> List[Dict]:
         # Extract tables from result
         tables = []
         
-        # Docling typically returns a document structure with tables
-        # The exact structure may vary, but typically includes a 'tables' attribute
-        if hasattr(result, 'tables') and result.tables:
-            for idx, table in enumerate(result.tables):
-                page_num = getattr(table, 'page_number', idx + 1)
+        # Docling returns a conversion result with document tables
+        if hasattr(result, "document") and getattr(result.document, "tables", None):
+            for idx, table in enumerate(result.document.tables):
+                page_num = getattr(table, "page_number", idx + 1)
+                try:
+                    table_df = table.export_to_dataframe(doc=result.document)
+                except Exception as e:
+                    logger.warning(f"Failed to export table {idx} to DataFrame: {e}")
+                    continue
                 tables.append({
-                    'data': table,
-                    'confidence': getattr(table, 'confidence', 1.0),
-                    'page_number': page_num,
-                    'table_index': idx
+                    "dataframe": table_df,
+                    "confidence": getattr(table, "confidence", 1.0),
+                    "page_number": page_num,
+                    "table_index": idx
                 })
-        elif hasattr(result, 'content'):
-            # Alternative structure - tables might be in content
-            content = result.content
-            if isinstance(content, list):
-                table_idx = 0
-                for item in content:
-                    if hasattr(item, 'type') and item.type == 'table':
-                        page_num = getattr(item, 'page_number', None)
-                        tables.append({
-                            'data': item,
-                            'confidence': getattr(item, 'confidence', 1.0),
-                            'page_number': page_num,
-                            'table_index': table_idx
-                        })
-                        table_idx += 1
         
         logger.info(f"Extracted {len(tables)} tables from PDF")
         return tables
@@ -96,6 +85,9 @@ def table_to_dataframe(table_data: Dict) -> pd.DataFrame:
         pandas DataFrame
     """
     try:
+        if "dataframe" in table_data and isinstance(table_data["dataframe"], pd.DataFrame):
+            return table_data["dataframe"]
+        
         table = table_data.get('data')
         
         # Handle different table structures from Docling
