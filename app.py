@@ -43,25 +43,142 @@ st.set_page_config(
 # Custom CSS for better styling
 st.markdown("""
     <style>
+    :root {
+        --primary: #1f77b4;
+        --primary-600: #18639b;
+        --primary-50: #e9f2fb;
+        --accent: #ff7f0e;
+        --success: #22c55e;
+        --warning: #f59e0b;
+        --error: #ef4444;
+        --text: #111827;
+        --muted: #6b7280;
+        --border: #e5e7eb;
+        --card-bg: #ffffff;
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+        --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.08);
+        --radius-sm: 8px;
+        --radius-md: 12px;
+    }
+
+    /* Skip link for keyboard users */
+    .skip-link {
+        position: absolute;
+        left: -999px;
+        top: 0;
+        background: #000;
+        color: #fff;
+        padding: 8px 12px;
+        z-index: 1000;
+        border-radius: 6px;
+    }
+    .skip-link:focus {
+        left: 16px;
+        top: 16px;
+    }
+
     .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1f77b4;
-        margin-bottom: 1rem;
+        font-size: 2.4rem;
+        font-weight: 700;
+        color: var(--primary);
+        margin-bottom: 0.5rem;
+        letter-spacing: -0.5px;
     }
-    .success-box {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        margin: 1rem 0;
+    .section-title {
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin: 0.5rem 0 0.75rem 0;
+        color: var(--text);
     }
-    .error-box {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        background-color: #f8d7da;
-        border: 1px solid #f5c6cb;
-        margin: 1rem 0;
+    .section-subtitle {
+        color: var(--muted);
+        font-size: 0.95rem;
+        margin-bottom: 0.5rem;
+    }
+    .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        background: var(--primary-50);
+        color: var(--primary-600);
+        border: 1px solid var(--border);
+    }
+    .card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: 16px;
+        box-shadow: var(--shadow-sm);
+    }
+
+    /* Streamlit component styling */
+    .stButton > button {
+        border-radius: 10px;
+        font-weight: 600;
+        transition: all 120ms ease-in-out;
+    }
+    .stButton > button:focus {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+    }
+    .stButton > button:hover {
+        transform: translateY(-1px);
+        box-shadow: var(--shadow-sm);
+    }
+    div[data-testid="stMetric"] {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 10px 12px;
+        box-shadow: var(--shadow-sm);
+    }
+    div[data-testid="stExpander"] {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--card-bg);
+    }
+    div[data-testid="stExpander"] summary {
+        font-weight: 600;
+    }
+    div[data-testid="stTabs"] button {
+        font-weight: 600;
+    }
+    div[data-testid="stCaptionContainer"] {
+        color: var(--muted);
+    }
+    .stTextArea textarea, .stTextInput input, .stSelectbox select, .stNumberInput input {
+        border-radius: 10px;
+    }
+    .stAlert {
+        border-radius: var(--radius-md);
+    }
+
+    /* Chat styling */
+    div[data-testid="stChatMessage"] {
+        border-radius: 12px;
+        padding: 8px 10px;
+        box-shadow: var(--shadow-sm);
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+        .main-header {
+            font-size: 1.8rem;
+        }
+        div[data-testid="stMetric"] {
+            padding: 8px 10px;
+        }
+        .stButton > button {
+            width: 100%;
+        }
+        div[data-testid="stHorizontalBlock"] {
+            flex-direction: column;
+            gap: 0.75rem;
+        }
     }
     </style>
 """, unsafe_allow_html=True)
@@ -265,6 +382,19 @@ def initialize_session_state():
 def render_upload_tab():
     """Render the Upload tab content."""
     st.header("📤 Upload File")
+    st.caption("Upload a file to start exploring your data. We will extract tables and prepare them for analysis.")
+    
+    # Quick steps
+    step1, step2, step3 = st.columns(3)
+    with step1:
+        st.markdown("**1. Upload**")
+        st.caption("CSV, Excel, PDF, or image files")
+    with step2:
+        st.markdown("**2. Process**")
+        st.caption("We extract tables and metadata")
+    with step3:
+        st.markdown("**3. Explore**")
+        st.caption("Visualize and query your data")
     
     # File uploader
     uploaded_file = st.file_uploader(
@@ -272,6 +402,7 @@ def render_upload_tab():
         type=['csv', 'xlsx', 'xls', 'pdf', 'png', 'jpg', 'jpeg', 'tiff', 'bmp'],
         help="Supported formats: CSV, Excel, PDF, Images"
     )
+    st.caption("Tip: For large files, prefer CSV or Excel for faster processing.")
     
     # Detect file clear/removal - cleanup Redis
     current_file_id = uploaded_file.file_id if uploaded_file else None
@@ -295,7 +426,11 @@ def render_upload_tab():
     if uploaded_file is not None:
         col1, col2 = st.columns([1, 4])
         with col1:
-            upload_button = st.button("🚀 Upload & Process", type="primary")
+            upload_button = st.button(
+                "🚀 Upload & Process",
+                type="primary",
+                help="Upload the file and extract tables for analysis"
+            )
         
         if upload_button:
             with st.spinner("Uploading and processing file..."):
@@ -357,6 +492,7 @@ def render_upload_tab():
                     # Display error
                     error_msg = result.get("error", "Unknown error occurred")
                     st.error(f"❌ Failed to process file: {error_msg}")
+                    st.info("Try a smaller file, or specify the file type manually.")
                     
                     # Show metadata if available
                     metadata = result.get("metadata", {})
@@ -397,6 +533,7 @@ def render_upload_tab():
 def render_manipulation_tab():
     """Render the Data Manipulation tab content."""
     st.header("🔧 Data Manipulation")
+    st.caption("Use natural language to transform your data. Each operation creates a new version you can revisit.")
     
     session_id = st.session_state.get("current_session_id")
     
@@ -479,6 +616,7 @@ def render_manipulation_tab():
     
     # Version History Graph Section
     st.subheader("📜 Version History Graph")
+    st.caption("Track transformations over time. Branch from any version to explore alternatives.")
     
     try:
         response = requests.get(f"{FASTAPI_URL}/api/session/{session_id}/versions", timeout=5)
@@ -521,7 +659,7 @@ def render_manipulation_tab():
             )
         
         with col2:
-            branch_button = st.button("🌿 Branch", type="secondary")
+            branch_button = st.button("🌿 Branch", type="secondary", help="Create a new branch from the selected version")
         
         if branch_button and selected_version != current_version:
             with st.spinner("Branching to selected version..."):
@@ -563,7 +701,7 @@ def render_manipulation_tab():
                     help="Prune old versions, keeping only the most recent N"
                 )
             with col2:
-                prune_button = st.button("Prune", type="secondary")
+                prune_button = st.button("Prune", type="secondary", help="Remove old versions and keep the most recent N")
             
             if prune_button:
                 with st.spinner("Pruning versions..."):
@@ -587,6 +725,7 @@ def render_manipulation_tab():
     
     # Natural Language Query Input
     st.subheader("💬 Natural Language Query")
+    st.caption("Describe the transformation you want. You can chain multiple steps in one sentence.")
     query = st.text_area(
         "Describe what you want to do with the data:",
         placeholder="e.g., Remove rows with missing values in the 'email' column, then sort by 'revenue' descending",
@@ -594,9 +733,29 @@ def render_manipulation_tab():
         key="nl_query_input"
     )
     
+    # Quick action chips
+    st.markdown("**Quick actions**")
+    chip1, chip2, chip3, chip4 = st.columns(4)
+    with chip1:
+        if st.button("Remove missing", key="quick_remove_missing"):
+            st.session_state["nl_query_input"] = "Remove rows with missing values"
+            st.rerun()
+    with chip2:
+        if st.button("Sort desc", key="quick_sort_desc"):
+            st.session_state["nl_query_input"] = "Sort by revenue descending"
+            st.rerun()
+    with chip3:
+        if st.button("Group avg", key="quick_group_avg"):
+            st.session_state["nl_query_input"] = "Group by department and calculate average salary"
+            st.rerun()
+    with chip4:
+        if st.button("Create column", key="quick_create_col"):
+            st.session_state["nl_query_input"] = "Create a new column full_name by combining first_name and last_name"
+            st.rerun()
+    
     col1, col2 = st.columns([1, 4])
     with col1:
-        execute_button = st.button("🚀 Execute Query", type="primary", width='stretch')
+        execute_button = st.button("🚀 Execute Query", type="primary", width='stretch', help="Run the query and update the data version")
     
     # Operation History
     st.divider()
@@ -607,7 +766,7 @@ def render_manipulation_tab():
         history_count = len(st.session_state.operation_history)
         st.caption(f"Total operations: {history_count}")
     with col2:
-        clear_history_button = st.button("🗑️ Clear History", width='stretch', help="Clear operation history")
+        clear_history_button = st.button("🗑️ Clear History", width='stretch', help="Clear operation history from this session")
     
     # Handle clear history
     if clear_history_button:
@@ -746,6 +905,10 @@ def main():
     # Initialize session state
     initialize_session_state()
     
+    # Accessibility: Skip link target
+    st.markdown('<a class="skip-link" href="#main-content">Skip to main content</a>', unsafe_allow_html=True)
+    st.markdown('<div id="main-content"></div>', unsafe_allow_html=True)
+
     # Header
     st.markdown('<div class="main-header">📊 Data Analyst Platform</div>', unsafe_allow_html=True)
     st.markdown("Upload your data files and manipulate them with natural language queries!")
@@ -758,8 +921,10 @@ def main():
         st.subheader("API Status")
         if check_api_health():
             st.success("✅ FastAPI server is running")
+            st.markdown('<span class="status-badge">Online</span>', unsafe_allow_html=True)
         else:
             st.error("❌ FastAPI server is not running")
+            st.markdown('<span class="status-badge">Offline</span>', unsafe_allow_html=True)
             st.warning("Please start the FastAPI server:\n```bash\npython main.py\n```")
             st.stop()
         
@@ -767,6 +932,7 @@ def main():
         st.subheader("MCP Server Status")
         if OPENAI_API_KEY:
             st.success("✅ OpenAI API key configured")
+            st.caption("Key detected and ready for queries.")
         else:
             st.warning("⚠️ OPENAI_API_KEY not set")
             st.caption("Required for Data Manipulation tab")

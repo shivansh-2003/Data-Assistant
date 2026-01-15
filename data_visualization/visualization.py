@@ -292,6 +292,7 @@ def render_visualization_tab():
     
     st.header("📈 Visualization Centre")
     st.markdown("**Select columns below to build charts instantly. Pick aggregation for grouped data.**")
+    st.caption("Charts update instantly based on your selections. Use recommendations for a quick start.")
     
     session_id = st.session_state.get("current_session_id")
     
@@ -355,6 +356,7 @@ def render_visualization_tab():
     expander_expanded = st.session_state.get('viz_recommendations') is not None
     
     with st.expander("🤖 Smart Chart Recommendations", expanded=expander_expanded):
+        st.caption("Describe your goal to get tailored chart suggestions.")
         col1, col2 = st.columns([3, 1])
         with col1:
             user_goal = st.text_input(
@@ -493,11 +495,13 @@ def render_visualization_tab():
         key="viz_chart_mode",
         horizontal=True
     )
+    st.caption("Use Basic for single metrics, Combo for dual-axis comparisons.")
     
     st.divider()
     
     # Chart Controls in main area (using expander for cleaner UI)
     with st.expander("📊 Chart Controls", expanded=True):
+        st.caption("Pick chart type, columns, and optional grouping to build your visualization.")
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -796,7 +800,7 @@ def render_visualization_tab():
         # Pin to Dashboard button
         col_pin1, col_pin2 = st.columns([1, 4])
         with col_pin1:
-            if st.button("📌 Pin to Dashboard", key="pin_chart_button", type="secondary"):
+            if st.button("📌 Pin to Dashboard", key="pin_chart_button", type="secondary", help="Save this chart to your dashboard"):
                 # Get current chart configuration
                 chart_config = _default_dashboard_builder.get_chart_config(
                     chart_mode,
@@ -827,6 +831,7 @@ def render_visualization_tab():
         # One-click Exports
         st.divider()
         st.subheader("📥 Export Chart")
+        st.caption("Download the current chart in PNG, SVG, or HTML formats.")
         col1, col2, col3 = st.columns(3)
         
         # Determine chart name for export

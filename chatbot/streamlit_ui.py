@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 def render_chatbot_tab():
     """Main function to render the InsightBot chatbot tab."""
     st.header("💬 InsightBot - Ask Anything About Your Data")
+    st.caption("Ask questions, get insights, and generate charts from your data in plain language.")
     
     session_id = st.session_state.get("current_session_id")
     
@@ -41,12 +42,18 @@ def render_chatbot_tab():
             viz_config = current_state.values.get("viz_config")
             insight_data = current_state.values.get("insight_data")
             
+            show_data = st.toggle(
+                "Show data tables in responses",
+                value=True,
+                help="Hide data tables when you only want narrative answers or charts."
+            )
+            
             # Generate chart from config if present
             viz_figure = None
             if viz_config:
                 viz_figure = generate_chart_from_config_ui(viz_config, session_id)
             
-            display_message_history(messages, viz_figure, insight_data)
+            display_message_history(messages, viz_figure, insight_data, show_data=show_data)
         
         # Chat input
         handle_chat_input(session_id, config)
@@ -116,7 +123,7 @@ def display_session_info(session_id: str):
         logger.warning(f"Could not load session summary: {e}")
 
 
-def display_message_history(messages: list, viz_figure=None, insight_data=None):
+def display_message_history(messages: list, viz_figure=None, insight_data=None, show_data: bool = True):
     """Display chat message history with optional DataFrame and visualization."""
     import pandas as pd
     
@@ -135,7 +142,7 @@ def display_message_history(messages: list, viz_figure=None, insight_data=None):
     
     # Display DataFrame ONLY if there's NO visualization
     # (For filtering/listing queries without charts)
-    if insight_data is not None and last_ai_message_idx is not None and viz_figure is None:
+    if show_data and insight_data is not None and last_ai_message_idx is not None and viz_figure is None:
         if insight_data.get("type") == "dataframe":
             with st.chat_message("assistant"):
                 # Convert back to DataFrame for display
@@ -191,6 +198,7 @@ def generate_chart_from_config_ui(viz_config: dict, session_id: str):
 
 def handle_chat_input(session_id: str, config: dict):
     """Handle user chat input and invoke graph."""
+    st.caption("Tip: Ask for a chart directly, e.g., 'Plot revenue by month as a line chart.'")
     user_input = st.chat_input("Ask anything about your data...")
     
     if user_input:
