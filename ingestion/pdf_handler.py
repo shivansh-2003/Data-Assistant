@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 # Try to import Docling, handle gracefully if not available
 try:
     from docling.document_converter import DocumentConverter
-    from docling.datamodel.base_models import InputFormat
     DOCLING_AVAILABLE = True
 except ImportError:
     DOCLING_AVAILABLE = False
@@ -36,13 +35,16 @@ def extract_tables_with_docling(file_path: str) -> List[Dict]:
         raise ImportError("Docling is not installed. Please install it with: pip install docling")
     
     try:
-        # Initialize Docling converter
-        converter = DocumentConverter(
-            format=InputFormat.PDF,
-            ocr_enabled=IngestionConfig.DOCLING_OCR_ENABLED,
-            table_extraction_mode=IngestionConfig.DOCLING_TABLE_EXTRACTION_MODE,
-            layout_preservation=IngestionConfig.DOCLING_LAYOUT_PRESERVATION
-        )
+        # Initialize Docling converter (handle API differences across versions)
+        try:
+            converter = DocumentConverter(
+                ocr_enabled=IngestionConfig.DOCLING_OCR_ENABLED,
+                table_extraction_mode=IngestionConfig.DOCLING_TABLE_EXTRACTION_MODE,
+                layout_preservation=IngestionConfig.DOCLING_LAYOUT_PRESERVATION
+            )
+        except TypeError as e:
+            logger.warning(f"Docling init params not supported ({e}); falling back to defaults.")
+            converter = DocumentConverter()
         
         # Convert document and extract tables
         result = converter.convert(file_path)
