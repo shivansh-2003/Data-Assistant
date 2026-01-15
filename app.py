@@ -705,16 +705,74 @@ def render_manipulation_tab():
     st.divider()
     
     # Version History Graph Section
-    st.subheader("📜 Version History Graph")
-    st.caption("Track transformations over time. Branch from any version to explore alternatives.")
+    st.subheader("📜 Version History")
+    st.caption("Track transformations over time. Filter versions and branch safely.")
+    
+    def _format_version_label(node: Dict, current_version: str) -> str:
+        vid = node.get("id", "unknown")
+        op = node.get("operation") or node.get("label", "Operation")
+        ts = node.get("timestamp")
+        ts_text = ""
+        if ts:
+            try:
+                ts_text = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+            except Exception:
+                ts_text = ""
+        if vid == current_version:
+            return f"{vid} (current) - {op} {ts_text}".strip()
+        return f"{vid} - {op} {ts_text}".strip()
+    
+    def _normalize_graph(graph: Dict, current_version: str, search_text: str, keep_last_n: int) -> Dict:
+        nodes = graph.get("nodes", [])
+        edges = graph.get("edges", [])
+        
+        # Sort nodes by timestamp (newest first)
+        nodes_sorted = sorted(nodes, key=lambda n: n.get("timestamp", 0), reverse=True)
+        if keep_last_n:
+            nodes_sorted = nodes_sorted[:keep_last_n]
+        
+        if search_text:
+            search_text_lower = search_text.lower()
+            nodes_sorted = [
+                n for n in nodes_sorted
+                if search_text_lower in (n.get("operation", "") or n.get("label", "")).lower()
+            ]
+        
+        node_ids = {n.get("id") for n in nodes_sorted}
+        edges_filtered = [e for e in edges if e.get("from") in node_ids and e.get("to") in node_ids]
+        
+        return {"nodes": nodes_sorted, "edges": edges_filtered}
     
     try:
         response = requests.get(f"{FASTAPI_URL}/api/session/{session_id}/versions", timeout=5)
         response.raise_for_status()
         graph_data = response.json().get("graph", {"nodes": [], "edges": []})
-    except Exception as e:
+    except Exception:
         st.info("No version history yet. Perform operations to build the graph.")
         graph_data = {"nodes": [], "edges": []}
+    
+    # Filters and layout
+    if graph_data.get("nodes"):
+        filter_col, info_col = st.columns([2, 3])
+        with filter_col:
+            st.markdown("**Filters**")
+            keep_last_n = st.number_input(
+                "Show last N versions",
+                min_value=1,
+                max_value=200,
+                value=min(30, len(graph_data.get("nodes", []))),
+                help="Limit the number of versions to improve readability"
+            )
+            search_text = st.text_input(
+                "Search operation text",
+                placeholder="e.g., filter, sort, missing"
+            )
+        with info_col:
+            current_version = metadata.get("current_version", "v0")
+            st.markdown(f"**Current version:** `{current_version}`")
+            st.caption("Select a version to view details and branch.")
+        
+        graph_data = _normalize_graph(graph_data, current_version, search_text, keep_last_n)
     
     # Render graph if nodes exist
     if graph_data.get("nodes"):
@@ -724,9 +782,12 @@ def render_manipulation_tab():
         dot.attr('node', shape='box', style='rounded,filled', fillcolor='lightblue')
         
         # Add nodes
+        current_version = metadata.get("current_version", "v0")
         for node in graph_data.get("nodes", []):
-            label = node.get("label", node.get("id", "Unknown"))
-            dot.node(node["id"], label)
+            label = _format_version_label(node, current_version)
+            is_current = node.get("id") == current_version
+            fill = "lightgreen" if is_current else "lightblue"
+            dot.node(node["id"], label, fillcolor=fill)
         
         # Add edges
         for edge in graph_data.get("edges", []):
@@ -736,38 +797,62 @@ def render_manipulation_tab():
         # Display graph
         st.graphviz_chart(dot.source)
         
-        # Branching controls
-        col1, col2 = st.columns([3, 1])
+        # Version selector and details
+        col1, col2 = st.columns([2, 2])
         with col1:
             version_options = [n["id"] for n in graph_data.get("nodes", [])]
-            current_version = metadata.get("current_version", "v0")
             selected_version = st.selectbox(
-                "Branch to version",
+                "Select version",
                 options=version_options,
                 index=version_options.index(current_version) if current_version in version_options else 0,
-                help="Select a version to branch from. New operations will start from this version."
+                help="Pick a version to view details or branch from."
             )
         
         with col2:
+            version_node = next((n for n in graph_data.get("nodes", []) if n["id"] == selected_version), None)
+            if version_node:
+                op_text = version_node.get("operation", "N/A")
+                ts = version_node.get("timestamp")
+                ts_text = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "N/A"
+                st.markdown("**Version Details**")
+                st.write(f"**Operation:** {op_text}")
+                if version_node.get("query"):
+                    st.write(f"**Query:** {version_node.get('query')}")
+                st.write(f"**Created:** {ts_text}")
+        
+        # Branching controls
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            confirm_branch = st.checkbox(
+                "Confirm branch to selected version",
+                value=False,
+                help="Confirm before changing the active version"
+            )
+        with col2:
             branch_button = st.button("🌿 Branch", type="secondary", help="Create a new branch from the selected version")
         
-        if branch_button and selected_version != current_version:
-            with st.spinner("Branching to selected version..."):
-                try:
-                    branch_response = requests.post(
-                        f"{FASTAPI_URL}/api/session/{session_id}/branch",
-                        json={"version_id": selected_version},
-                        timeout=10
-                    )
-                    if branch_response.status_code == 200:
-                        st.success(f"✅ Branched to {selected_version}. New operations will start from here.")
-                        st.rerun()
-                    else:
-                        st.error("Failed to branch to version.")
-                except Exception as e:
-                    st.error(f"Error branching: {e}")
+        if branch_button:
+            if selected_version == current_version:
+                st.info("You are already on this version.")
+            elif not confirm_branch:
+                st.warning("Please confirm the branch action first.")
+            else:
+                with st.spinner("Branching to selected version..."):
+                    try:
+                        branch_response = requests.post(
+                            f"{FASTAPI_URL}/api/session/{session_id}/branch",
+                            json={"version_id": selected_version},
+                            timeout=10
+                        )
+                        if branch_response.status_code == 200:
+                            st.success(f"✅ Branched to {selected_version}. New operations will start from here.")
+                            st.rerun()
+                        else:
+                            st.error("Failed to branch to version.")
+                    except Exception as e:
+                        st.error(f"Error branching: {e}")
         
-        # Version details expander
+        # Version details expander (expanded details)
         if selected_version:
             with st.expander(f"📋 Version Details: {selected_version}"):
                 version_node = next((n for n in graph_data.get("nodes", []) if n["id"] == selected_version), None)
