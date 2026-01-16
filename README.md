@@ -40,6 +40,38 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 - **Visualization**: Plotly (interactive charts), Kaleido (PNG/SVG export)
 - **MCP Server**: FastMCP for tool-based data operations
 
+### 🌐 Production Deployment
+
+**Live Services on Render:**
+
+| Service | URL | Status |
+|---------|-----|--------|
+| **MCP Server** | https://data-analyst-mcp-server.onrender.com | ✅ Live |
+| **FastAPI Backend** | https://data-assistant-m4kl.onrender.com | ✅ Live |
+| **Streamlit UI** | Run locally (connects to production) | 📱 Local |
+
+**Quick Start with Production:**
+```bash
+# 1. Clone repo
+git clone <repository-url>
+cd Data-Assistant
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Set up .env with production URLs (see Configuration section)
+
+# 4. Run Streamlit locally (connects to production automatically)
+streamlit run app.py
+```
+
+**Benefits:**
+- ✅ No need to run MCP server locally
+- ✅ No need to run FastAPI backend locally  
+- ✅ Always-on data processing services
+- ✅ Faster setup for new users
+- ✅ Consistent environment across team
+
 ## 🏗 Architecture
 
 ### System Architecture Overview
@@ -820,28 +852,65 @@ flowchart LR
     style OPENAI fill:#9C27B0
 ```
 
-### Production Deployment Options
+### Current Production Deployment (Render)
+
+```mermaid
+flowchart LR
+    subgraph "User's Machine"
+        BROWSER[Web Browser<br/>localhost:8501]
+        STREAMLIT[Streamlit UI<br/>Local]
+    end
+    
+    subgraph "Render Cloud Platform"
+        MCP_PROD[MCP Server<br/>data-analyst-mcp-server.onrender.com<br/>✅ Python Environment]
+        API_PROD[FastAPI Backend<br/>data-assistant-m4kl.onrender.com<br/>✅ Python Environment]
+    end
+    
+    subgraph "Cloud Services"
+        REDIS[(Upstash Redis<br/>Serverless)]
+        OPENAI[OpenAI API<br/>GPT-4/5]
+    end
+    
+    BROWSER --> STREAMLIT
+    STREAMLIT -->|HTTP Requests| API_PROD
+    STREAMLIT -->|MCP Protocol| MCP_PROD
+    
+    API_PROD <-->|REST API| REDIS
+    MCP_PROD <-->|REST API| REDIS
+    MCP_PROD <-->|LLM Calls| OPENAI
+    
+    style MCP_PROD fill:#4CAF50
+    style API_PROD fill:#2196F3
+    style STREAMLIT fill:#FF9800
+    style REDIS fill:#FF5722
+    style OPENAI fill:#9C27B0
+```
+
+### Alternative Deployment Options
 
 ```mermaid
 flowchart TD
-    subgraph "Option 1: Single Server"
+    subgraph "Option 1: Single Server (On-Premise)"
         NGINX[Nginx<br/>Reverse Proxy]
         NGINX --> UI1[Streamlit :8501]
         NGINX --> API1[FastAPI :8001]
         NGINX --> MCP1[MCP Server :8000]
     end
     
-    subgraph "Option 2: Microservices"
+    subgraph "Option 2: Microservices (Cloud)"
         LB[Load Balancer]
         LB --> UI2[Streamlit<br/>Multiple Instances]
         LB --> API2[FastAPI<br/>Auto-scaling]
         LB --> MCP2[MCP Server<br/>Worker Pool]
     end
     
-    subgraph "Option 3: Serverless"
-        EDGE[Edge Functions]
-        EDGE --> LAMBDA[Lambda/Cloud Functions<br/>FastAPI + MCP]
-        EDGE --> STATIC[Static Streamlit<br/>CDN Distribution]
+    subgraph "Option 3: Current Setup (Hybrid)"
+        LOCAL[Local Streamlit<br/>Development]
+        RENDER_MCP[Render: MCP Server<br/>✅ Live]
+        RENDER_API[Render: FastAPI<br/>✅ Live]
+        
+        LOCAL --> RENDER_API
+        LOCAL --> RENDER_MCP
     end
     
     subgraph "Shared Infrastructure"
@@ -858,14 +927,13 @@ flowchart TD
     API2 -.->|Data| REDIS2
     MCP2 -.->|Data| REDIS2
     
-    LAMBDA -.->|Data| REDIS2
-    STATIC -.->|Data| REDIS2
+    RENDER_API -.->|Data| REDIS2
+    RENDER_MCP -.->|Data| REDIS2
+    RENDER_MCP -.->|AI| OPENAI2
     
-    MCP1 -.->|AI| OPENAI2
-    MCP2 -.->|AI| OPENAI2
-    LAMBDA -.->|AI| OPENAI2
-    
-    style LB fill:#FFC107
+    style RENDER_MCP fill:#4CAF50
+    style RENDER_API fill:#2196F3
+    style LOCAL fill:#FF9800
     style REDIS2 fill:#FF5722
     style OPENAI2 fill:#9C27B0
 ```
@@ -912,12 +980,32 @@ SESSION_TTL_MINUTES=30
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=gpt-4o  # or gpt-5.1 if available
 
-# MCP Server Configuration (optional)
-MCP_SERVER_URL=http://127.0.0.1:8000/mcp
-INGESTION_API_URL=http://127.0.0.1:8001
+# Production Deployment URLs (Render)
+MCP_SERVER_URL=https://data-analyst-mcp-server.onrender.com/data/mcp
+INGESTION_API_URL=https://data-assistant-m4kl.onrender.com
+
+# Local Development URLs (uncomment for local development)
+# MCP_SERVER_URL=http://127.0.0.1:8000/data/mcp
+# INGESTION_API_URL=http://127.0.0.1:8001
 ```
 
 ### Step 5: Start Services
+
+#### Option A: Use Production Deployment (Recommended)
+
+**🌐 Production Services (Already Deployed)**:
+- **MCP Server**: https://data-analyst-mcp-server.onrender.com
+- **FastAPI Backend**: https://data-assistant-m4kl.onrender.com
+- **Status**: Both services are live on Render!
+
+**Only Start Streamlit Locally:**
+```bash
+streamlit run app.py
+# UI runs on http://localhost:8501
+# Connects to production MCP & FastAPI automatically
+```
+
+#### Option B: Full Local Development
 
 **Terminal 1 - MCP Server:**
 ```bash
@@ -938,20 +1026,22 @@ streamlit run app.py
 # UI runs on http://localhost:8501
 ```
 
+**Note**: For local development, update `.env` to use local URLs.
+
 ## ⚙️ Configuration
 
 ### Environment Variables
 
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST API URL | None | Yes |
-| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST API Token | None | Yes |
-| `SESSION_TTL_MINUTES` | Session expiration time (minutes) | 30 | No |
-| `OPENAI_API_KEY` | OpenAI API key for LLM | None | Yes |
-| `OPENAI_MODEL` | OpenAI model to use | gpt-4o | No |
-| `MCP_SERVER_URL` | MCP server endpoint | http://127.0.0.1:8000/mcp | No |
-| `INGESTION_API_URL` | FastAPI backend URL | http://127.0.0.1:8001 | No |
-| `PORT` | FastAPI server port | 8001 | No |
+| Variable | Description | Production Default | Local Default | Required |
+|----------|-------------|-------------------|---------------|----------|
+| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST API URL | - | None | Yes |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST API Token | - | None | Yes |
+| `SESSION_TTL_MINUTES` | Session expiration time (minutes) | 30 | 30 | No |
+| `OPENAI_API_KEY` | OpenAI API key for LLM | - | None | Yes |
+| `OPENAI_MODEL` | OpenAI model to use | gpt-4o | gpt-4o | No |
+| `MCP_SERVER_URL` | MCP server endpoint | https://data-analyst-mcp-server.onrender.com/data/mcp | http://127.0.0.1:8000/data/mcp | No |
+| `INGESTION_API_URL` | FastAPI backend URL | https://data-assistant-m4kl.onrender.com | http://127.0.0.1:8001 | No |
+| `PORT` | FastAPI server port | 8001 | 8001 | No |
 
 ### File Size Limits
 
@@ -1577,33 +1667,69 @@ flowchart TD
 
 ### Quick Diagnostic Commands
 
+**Production Services (Render):**
+```bash
+# Check MCP Server
+curl https://data-analyst-mcp-server.onrender.com/health
+
+# Check FastAPI Backend
+curl https://data-assistant-m4kl.onrender.com/health
+
+# Check API root
+curl https://data-assistant-m4kl.onrender.com/
+
+# Expected Response:
+# {"message":"Data Analyst Platform - Ingestion API","version":"1.1.0","redis_connected":true,...}
+```
+
+**Local Development:**
+```bash
+# Check local services
+curl localhost:8001/health  # FastAPI
+curl localhost:8000/health  # MCP Server (if running locally)
+curl localhost:8501         # Streamlit
+
+# Check ports in use
+lsof -i :8001  # FastAPI
+lsof -i :8000  # MCP Server  
+lsof -i :8501  # Streamlit
+```
+
 ```mermaid
 flowchart LR
-    subgraph "Health Checks"
+    subgraph "Production Health Checks"
+        HP1[curl https://data-assistant-m4kl.onrender.com/health]
+        HP2[curl https://data-analyst-mcp-server.onrender.com/health]
+    end
+    
+    subgraph "Local Health Checks"
         H1[curl localhost:8001/health]
         H2[curl localhost:8000/health]
         H3[curl localhost:8501]
     end
     
-    subgraph "Port Checks"
-        P1[lsof -i :8001<br/>FastAPI]
-        P2[lsof -i :8000<br/>MCP Server]
-        P3[lsof -i :8501<br/>Streamlit]
-    end
-    
     subgraph "Service Status"
-        H1 -->|200 OK| S1[✅ FastAPI Running]
-        H2 -->|200 OK| S2[✅ MCP Running]
-        H3 -->|200 OK| S3[✅ Streamlit Running]
+        HP1 -->|200 OK| SP1[✅ Production FastAPI]
+        HP2 -->|200 OK| SP2[✅ Production MCP]
         
-        H1 -->|Failed| E1[❌ Start FastAPI]
-        H2 -->|Failed| E2[❌ Start MCP]
+        H1 -->|200 OK| S1[✅ Local FastAPI]
+        H2 -->|200 OK| S2[✅ Local MCP]
+        H3 -->|200 OK| S3[✅ Streamlit UI]
+        
+        HP1 -->|Failed| EP1[❌ Check Render Status]
+        HP2 -->|Failed| EP2[❌ Check Render Status]
+        H1 -->|Failed| E1[❌ Start Local FastAPI]
+        H2 -->|Failed| E2[❌ Start Local MCP]
         H3 -->|Failed| E3[❌ Start Streamlit]
     end
     
+    style SP1 fill:#4CAF50
+    style SP2 fill:#4CAF50
     style S1 fill:#4CAF50
     style S2 fill:#4CAF50
     style S3 fill:#4CAF50
+    style EP1 fill:#FF9800
+    style EP2 fill:#FF9800
     style E1 fill:#F44336
     style E2 fill:#F44336
     style E3 fill:#F44336
