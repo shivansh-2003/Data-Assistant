@@ -5,3 +5,9 @@ test_files/
 plan.plan.md
 .DS_Store
 data-mcp/
+
+# Streamlit secrets (DO NOT COMMIT)
+.streamlit/secrets.toml
+
+# Visualization test outputs
+viz_test_output/

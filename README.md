@@ -9,6 +9,7 @@ A powerful, multi-modal data analysis platform that lets you upload messy real-w
 - [Features](#features)
 - [Installation](#installation)
 - [Configuration](#configuration)
+  - [Secrets Setup Guide](SECRETS_SETUP.md) 🔐
 - [Usage](#usage)
 - [API Documentation](#api-documentation)
 - [Project Structure](#project-structure)
@@ -42,15 +43,23 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 
 ### 🌐 Production Deployment
 
-**Live Services on Render:**
+**Live Services:**
 
-| Service | URL | Status |
-|---------|-----|--------|
-| **MCP Server** | https://data-analyst-mcp-server.onrender.com | ✅ Live |
-| **FastAPI Backend** | https://data-assistant-m4kl.onrender.com | ✅ Live |
-| **Streamlit UI** | Run locally (connects to production) | 📱 Local |
+| Service | URL | Platform | Status |
+|---------|-----|----------|--------|
+| **Streamlit UI** | https://data-assistant-mu6xtnwivdpi8umtp94wuh.streamlit.app/ | Streamlit Cloud | ✅ Live |
+| **FastAPI Backend** | https://data-assistant-m4kl.onrender.com | Render | ✅ Live |
+| **MCP Server** | https://data-analyst-mcp-server.onrender.com | Render | ✅ Live |
 
-**Quick Start with Production:**
+**Quick Start - Use Live Deployment:**
+
+🌐 **Access the live app instantly (no setup required):**
+
+👉 **https://data-assistant-mu6xtnwivdpi8umtp94wuh.streamlit.app/**
+
+All backend services are already running in production!
+
+**For Local Development:**
 ```bash
 # 1. Clone repo
 git clone <repository-url>
@@ -59,13 +68,16 @@ cd Data-Assistant
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Set up .env with production URLs (see Configuration section)
+# 3. Set up secrets (see Configuration section)
+cp .streamlit/secrets.toml.template .streamlit/secrets.toml
+# Edit secrets.toml with your OpenAI API key
 
-# 4. Run Streamlit locally (connects to production automatically)
+# 4. Run Streamlit locally (connects to production backend automatically)
 streamlit run app.py
 ```
 
 **Benefits:**
+- ✅ **Fully deployed UI** - Access from anywhere
 - ✅ No need to run MCP server locally
 - ✅ No need to run FastAPI backend locally  
 - ✅ Always-on data processing services
@@ -852,13 +864,16 @@ flowchart LR
     style OPENAI fill:#9C27B0
 ```
 
-### Current Production Deployment (Render)
+### Current Production Deployment
 
 ```mermaid
 flowchart LR
-    subgraph "User's Machine"
-        BROWSER[Web Browser<br/>localhost:8501]
-        STREAMLIT[Streamlit UI<br/>Local]
+    subgraph "User Device"
+        BROWSER[Web Browser<br/>Any Device]
+    end
+    
+    subgraph "Streamlit Cloud"
+        UI[Streamlit UI<br/>data-assistant-*.streamlit.app<br/>✅ Deployed]
     end
     
     subgraph "Render Cloud Platform"
@@ -867,21 +882,21 @@ flowchart LR
     end
     
     subgraph "Cloud Services"
-        REDIS[(Upstash Redis<br/>Serverless)]
+        REDIS[(Upstash Redis<br/>Serverless Storage)]
         OPENAI[OpenAI API<br/>GPT-4/5]
     end
     
-    BROWSER --> STREAMLIT
-    STREAMLIT -->|HTTP Requests| API_PROD
-    STREAMLIT -->|MCP Protocol| MCP_PROD
+    BROWSER -->|HTTPS| UI
+    UI -->|HTTP Requests| API_PROD
+    UI -->|MCP Protocol| MCP_PROD
     
     API_PROD <-->|REST API| REDIS
     MCP_PROD <-->|REST API| REDIS
     MCP_PROD <-->|LLM Calls| OPENAI
     
+    style UI fill:#FF9800
     style MCP_PROD fill:#4CAF50
     style API_PROD fill:#2196F3
-    style STREAMLIT fill:#FF9800
     style REDIS fill:#FF5722
     style OPENAI fill:#9C27B0
 ```
@@ -904,13 +919,13 @@ flowchart TD
         LB --> MCP2[MCP Server<br/>Worker Pool]
     end
     
-    subgraph "Option 3: Current Setup (Hybrid)"
-        LOCAL[Local Streamlit<br/>Development]
+    subgraph "Option 3: Current Setup (Full Cloud)"
+        STREAMLIT_CLOUD[Streamlit Cloud: UI<br/>✅ Live]
         RENDER_MCP[Render: MCP Server<br/>✅ Live]
         RENDER_API[Render: FastAPI<br/>✅ Live]
         
-        LOCAL --> RENDER_API
-        LOCAL --> RENDER_MCP
+        STREAMLIT_CLOUD --> RENDER_API
+        STREAMLIT_CLOUD --> RENDER_MCP
     end
     
     subgraph "Shared Infrastructure"
@@ -940,11 +955,31 @@ flowchart TD
 
 ## 🚀 Installation
 
-### Prerequisites
+### Option 1: Use Live Deployment (Recommended) ⚡
+
+**No installation needed!** Access the fully deployed platform:
+
+🌐 **https://data-assistant-mu6xtnwivdpi8umtp94wuh.streamlit.app/**
+
+**Features:**
+- ✅ Instant access from any device
+- ✅ All backend services running
+- ✅ No setup or configuration required
+- ✅ Always up-to-date with latest features
+
+**Just bring your data and start analyzing!**
+
+---
+
+### Option 2: Local Development Setup
+
+For customization or local development:
+
+#### Prerequisites
 
 - Python 3.8+
-- Upstash Redis account (free tier available)
 - OpenAI API key (for data manipulation)
+- Git
 
 ### Step 1: Clone Repository
 
@@ -966,9 +1001,48 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Step 4: Set Up Environment Variables
+### Step 4: Set Up Secrets Configuration
 
-Create a `.env` file in the project root:
+**Option A: Using Streamlit Secrets (Recommended)**
+
+Create `.streamlit/secrets.toml` in the project root:
+
+```bash
+# Create the .streamlit directory if it doesn't exist
+mkdir -p .streamlit
+
+# Copy the template and edit with your values
+cp .streamlit/secrets.toml.template .streamlit/secrets.toml
+```
+
+Edit `.streamlit/secrets.toml`:
+
+```toml
+# OpenAI Configuration
+[openai]
+api_key = "sk-your-openai-api-key-here"
+model = "gpt-4o"
+
+# Production Deployment URLs (Render)
+[api]
+fastapi_url = "https://data-assistant-m4kl.onrender.com"
+mcp_server_url = "https://data-analyst-mcp-server.onrender.com/data/mcp"
+
+# For Local Development: Uncomment and use these
+# [api.local]
+# fastapi_url = "http://127.0.0.1:8001"
+# mcp_server_url = "http://127.0.0.1:8000/data/mcp"
+
+# Optional: Redis Configuration (if running backend locally)
+[redis]
+rest_url = "https://your-redis-url.upstash.io"
+rest_token = "your-redis-token-here"
+session_ttl_minutes = 30
+```
+
+**Option B: Using Environment Variables (Legacy)**
+
+Alternatively, create a `.env` file in the project root:
 
 ```bash
 # Upstash Redis Configuration
@@ -978,16 +1052,14 @@ SESSION_TTL_MINUTES=30
 
 # OpenAI Configuration
 OPENAI_API_KEY=your-openai-api-key
-OPENAI_MODEL=gpt-4o  # or gpt-5.1 if available
+OPENAI_MODEL=gpt-4o
 
-# Production Deployment URLs (Render)
+# Production Deployment URLs
 MCP_SERVER_URL=https://data-analyst-mcp-server.onrender.com/data/mcp
-INGESTION_API_URL=https://data-assistant-m4kl.onrender.com
-
-# Local Development URLs (uncomment for local development)
-# MCP_SERVER_URL=http://127.0.0.1:8000/data/mcp
-# INGESTION_API_URL=http://127.0.0.1:8001
+FASTAPI_URL=https://data-assistant-m4kl.onrender.com
 ```
+
+**Note**: The app will try `secrets.toml` first, then fall back to environment variables.
 
 ### Step 5: Start Services
 
@@ -1030,18 +1102,50 @@ streamlit run app.py
 
 ## ⚙️ Configuration
 
-### Environment Variables
+### Configuration Methods
+
+The platform supports two configuration methods:
+
+1. **Streamlit Secrets** (`.streamlit/secrets.toml`) - **Recommended** ✅
+2. **Environment Variables** (`.env` file) - Legacy fallback
+
+The app checks for secrets in this order:
+1. Streamlit secrets (`.streamlit/secrets.toml`)
+2. Environment variables (`.env` or system environment)
+3. Hardcoded defaults
+
+### Streamlit Secrets Configuration
+
+Based on [Streamlit's official secrets management](https://docs.streamlit.io/develop/api-reference/connections/secrets.toml).
+
+**File**: `.streamlit/secrets.toml`
+
+| Section | Key | Description | Default | Required |
+|---------|-----|-------------|---------|----------|
+| `[openai]` | `api_key` | OpenAI API key for LLM | - | Yes |
+| `[openai]` | `model` | OpenAI model to use | gpt-4o | No |
+| `[api]` | `fastapi_url` | FastAPI backend URL | https://data-assistant-m4kl.onrender.com | No |
+| `[api]` | `mcp_server_url` | MCP server endpoint | https://data-analyst-mcp-server.onrender.com/data/mcp | No |
+| `[redis]` | `rest_url` | Upstash Redis REST API URL | - | Yes* |
+| `[redis]` | `rest_token` | Upstash Redis REST API Token | - | Yes* |
+| `[redis]` | `session_ttl_minutes` | Session expiration time (minutes) | 30 | No |
+
+*Required only if running backend services locally
+
+### Environment Variables (Legacy)
 
 | Variable | Description | Production Default | Local Default | Required |
 |----------|-------------|-------------------|---------------|----------|
-| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST API URL | - | None | Yes |
-| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST API Token | - | None | Yes |
+| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST API URL | - | None | Yes* |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST API Token | - | None | Yes* |
 | `SESSION_TTL_MINUTES` | Session expiration time (minutes) | 30 | 30 | No |
 | `OPENAI_API_KEY` | OpenAI API key for LLM | - | None | Yes |
 | `OPENAI_MODEL` | OpenAI model to use | gpt-4o | gpt-4o | No |
 | `MCP_SERVER_URL` | MCP server endpoint | https://data-analyst-mcp-server.onrender.com/data/mcp | http://127.0.0.1:8000/data/mcp | No |
-| `INGESTION_API_URL` | FastAPI backend URL | https://data-assistant-m4kl.onrender.com | http://127.0.0.1:8001 | No |
+| `FASTAPI_URL` | FastAPI backend URL | https://data-assistant-m4kl.onrender.com | http://127.0.0.1:8001 | No |
 | `PORT` | FastAPI server port | 8001 | 8001 | No |
+
+*Required only if running backend services locally
 
 ### File Size Limits
 
@@ -1596,250 +1700,5 @@ python mcp_client.py {session_id} "show me the first 5 rows"
 1. Add tool function in `data-mcp/data_functions/`
 2. Register in `data-mcp/server.py`
 3. Tool automatically available to LangChain agent
-
-## 🐛 Troubleshooting
-
-### Diagnostic Flowchart
-
-```mermaid
-flowchart TD
-    START{System Not Working?} --> CHECK1{Streamlit Loading?}
-    
-    CHECK1 -->|No| CHECK_API{FastAPI Running?}
-    CHECK1 -->|Yes| CHECK_UPLOAD{Can Upload Files?}
-    
-    CHECK_API -->|No| START_API[Start FastAPI<br/>python main.py<br/>Port 8001]
-    CHECK_API -->|Yes| CHECK_REDIS{Redis Connected?}
-    
-    CHECK_REDIS -->|No| FIX_REDIS[Check .env<br/>UPSTASH_REDIS_REST_URL<br/>UPSTASH_REDIS_REST_TOKEN]
-    CHECK_REDIS -->|Yes| CHECK_PORT[Check Port Conflicts<br/>lsof -i :8001]
-    
-    CHECK_UPLOAD -->|No| CHECK_SIZE{File Too Large?}
-    CHECK_UPLOAD -->|Yes| CHECK_MANIP{Can Manipulate Data?}
-    
-    CHECK_SIZE -->|Yes| INCREASE[Increase MAX_FILE_SIZE<br/>in ingestion/config.py]
-    CHECK_SIZE -->|No| CHECK_FORMAT{Supported Format?}
-    
-    CHECK_FORMAT -->|No| CONVERT[Convert to CSV/Excel<br/>or use PDF/Image]
-    CHECK_FORMAT -->|Yes| CHECK_LOGS[Check FastAPI Logs<br/>for Errors]
-    
-    CHECK_MANIP -->|No| CHECK_MCP{MCP Server Running?}
-    CHECK_MANIP -->|Yes| CHECK_VIZ{Visualizations Working?}
-    
-    CHECK_MCP -->|No| START_MCP[Start MCP Server<br/>cd data-mcp<br/>python data.py<br/>Port 8000]
-    CHECK_MCP -->|Yes| CHECK_KEY{OpenAI Key Set?}
-    
-    CHECK_KEY -->|No| SET_KEY[Set OPENAI_API_KEY<br/>in .env]
-    CHECK_KEY -->|Yes| CHECK_SESSION{Session Expired?}
-    
-    CHECK_SESSION -->|Yes| REUPLOAD[Re-upload File<br/>Sessions expire after 30min]
-    CHECK_SESSION -->|No| CHECK_NETWORK[Check Network<br/>MCP → FastAPI Connection]
-    
-    CHECK_VIZ -->|No| CHECK_DATA{Session Has Data?}
-    CHECK_VIZ -->|Yes| CHECK_CHAT{Chatbot Working?}
-    
-    CHECK_DATA -->|No| UPLOAD_FIRST[Upload File First<br/>in Upload Tab]
-    CHECK_DATA -->|Yes| CHECK_COLUMNS[Check Column Selection<br/>Valid X/Y columns?]
-    
-    CHECK_CHAT -->|No| CHECK_PANDAS{pandas-agent Error?}
-    CHECK_CHAT -->|Yes| DONE[✅ System Healthy!]
-    
-    CHECK_PANDAS -->|Yes| INSTALL[Install Dependencies<br/>pip install langchain-experimental]
-    CHECK_PANDAS -->|No| CHECK_HISTORY[Clear Chat History<br/>Try New Session]
-    
-    START_API --> VERIFY_API[Verify: curl localhost:8001/health]
-    START_MCP --> VERIFY_MCP[Verify: curl localhost:8000/health]
-    FIX_REDIS --> TEST_REDIS[Test Redis Connection]
-    SET_KEY --> RESTART[Restart Servers]
-    
-    VERIFY_API --> CHECK1
-    VERIFY_MCP --> CHECK_MANIP
-    TEST_REDIS --> CHECK_API
-    RESTART --> CHECK_MANIP
-    
-    style START fill:#FFC107
-    style DONE fill:#4CAF50
-    style START_API fill:#2196F3
-    style START_MCP fill:#2196F3
-    style FIX_REDIS fill:#FF5722
-    style SET_KEY fill:#FF5722
-```
-
-### Quick Diagnostic Commands
-
-**Production Services (Render):**
-```bash
-# Check MCP Server
-curl https://data-analyst-mcp-server.onrender.com/health
-
-# Check FastAPI Backend
-curl https://data-assistant-m4kl.onrender.com/health
-
-# Check API root
-curl https://data-assistant-m4kl.onrender.com/
-
-# Expected Response:
-# {"message":"Data Analyst Platform - Ingestion API","version":"1.1.0","redis_connected":true,...}
-```
-
-**Local Development:**
-```bash
-# Check local services
-curl localhost:8001/health  # FastAPI
-curl localhost:8000/health  # MCP Server (if running locally)
-curl localhost:8501         # Streamlit
-
-# Check ports in use
-lsof -i :8001  # FastAPI
-lsof -i :8000  # MCP Server  
-lsof -i :8501  # Streamlit
-```
-
-```mermaid
-flowchart LR
-    subgraph "Production Health Checks"
-        HP1[curl https://data-assistant-m4kl.onrender.com/health]
-        HP2[curl https://data-analyst-mcp-server.onrender.com/health]
-    end
-    
-    subgraph "Local Health Checks"
-        H1[curl localhost:8001/health]
-        H2[curl localhost:8000/health]
-        H3[curl localhost:8501]
-    end
-    
-    subgraph "Service Status"
-        HP1 -->|200 OK| SP1[✅ Production FastAPI]
-        HP2 -->|200 OK| SP2[✅ Production MCP]
-        
-        H1 -->|200 OK| S1[✅ Local FastAPI]
-        H2 -->|200 OK| S2[✅ Local MCP]
-        H3 -->|200 OK| S3[✅ Streamlit UI]
-        
-        HP1 -->|Failed| EP1[❌ Check Render Status]
-        HP2 -->|Failed| EP2[❌ Check Render Status]
-        H1 -->|Failed| E1[❌ Start Local FastAPI]
-        H2 -->|Failed| E2[❌ Start Local MCP]
-        H3 -->|Failed| E3[❌ Start Streamlit]
-    end
-    
-    style SP1 fill:#4CAF50
-    style SP2 fill:#4CAF50
-    style S1 fill:#4CAF50
-    style S2 fill:#4CAF50
-    style S3 fill:#4CAF50
-    style EP1 fill:#FF9800
-    style EP2 fill:#FF9800
-    style E1 fill:#F44336
-    style E2 fill:#F44336
-    style E3 fill:#F44336
-```
-
-### Common Issues
-
-**1. Redis Connection Failed**
-```
-Error: Upstash Redis not connected
-```
-**Solution**: Check `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` in `.env`
-
-**2. OpenAI API Key Missing**
-```
-Error: OPENAI_API_KEY environment variable is required
-```
-**Solution**: Set `OPENAI_API_KEY` in `.env` file
-
-**3. MCP Server Not Running**
-```
-Error: Connection refused
-```
-**Solution**: Start MCP server: `cd data-mcp && python server.py`
-
-**4. File Upload Fails**
-```
-Error: File size exceeds maximum
-```
-**Solution**: Check file size limit in `ingestion/config.py` or increase `MAX_FILE_SIZE`
-
-**5. Session Expired**
-```
-Error: Session not found
-```
-**Solution**: Sessions expire after 30 minutes. Upload file again or extend TTL before expiration
-
-**6. PDF/Image Processing Fails**
-```
-Error: Required library not installed
-```
-**Solution**: Install Docling: `pip install docling` (for PDF) or ensure Gemini API key is set (for images)
-
-**7. Chart Export Fails**
-```
-Error: PNG/SVG export failed
-```
-**Solution**: Install Kaleido for static image exports: `pip install kaleido`
-
-**8. InsightBot Not Responding**
-```
-Error: Agent execution failed / Graph invocation error
-```
-**Solution**: 
-- Ensure `OPENAI_API_KEY` is set correctly
-- Check that required packages are installed: `pip install langchain langgraph langchain-openai langchain-experimental`
-- Verify session data exists (upload a file first)
-- Check that FastAPI backend is running for data loading
-- Clear chat history if experiencing memory issues
-- Check console logs for specific node errors (router, analyzer, insight, viz, responder)
-
-**9. Visualization Not Generated in Chat**
-```
-Warning: Visualization skipped / Invalid viz config
-```
-**Solution**:
-- Verify column names in your query match actual column names in data
-- Check that the query includes explicit visualization keywords (plot, chart, visualize, show)
-- For filtered queries (e.g., "for Intel devices"), the filter column must exist
-- Try rephrasing the query to be more explicit: "Show a bar chart of average Price by Company"
-- Check analyzer prompt in `chatbot/prompts/system_prompts.py` for query pattern examples
-
-**10. Code Execution Timeout**
-```
-Error: Execution timed out (> 10 seconds)
-```
-**Solution**:
-- Query is too complex or dataset is very large
-- Try filtering data first to reduce size
-- Break complex query into smaller steps
-- Check for infinite loops in generated pandas code (review logs)
-- Consider increasing timeout in `chatbot/execution/safe_executor.py`
-
-### Debug Mode
-
-Enable debug logging:
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
-```
-
-### Checking Redis Connection
-
-```python
-from redis_db import is_connected
-print(f"Redis connected: {is_connected()}")
-```
-
-## 📝 License
-
-[Add your license here]
-
-## 🤝 Contributing
-
-[Add contribution guidelines here]
-
-## 📧 Support
-
-[Add support contact information here]
-
----
 
 **Built with ❤️ for data analysts**

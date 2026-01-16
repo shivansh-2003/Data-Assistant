@@ -20,17 +20,35 @@ from chatbot.streamlit_ui import render_chatbot_tab
 
 logger = logging.getLogger(__name__)
 
+# Configuration using Streamlit secrets
+# Falls back to environment variables if secrets not defined
+def get_secret(key_path, fallback_env=None, default=None):
+    """
+    Get secret from st.secrets with fallback to environment variable.
+    key_path can be a string like "openai.api_key" for nested keys.
+    """
+    try:
+        keys = key_path.split('.')
+        value = st.secrets
+        for key in keys:
+            value = value[key]
+        return value
+    except (KeyError, FileNotFoundError):
+        if fallback_env:
+            return os.getenv(fallback_env, default)
+        return default
+
 # FastAPI endpoint configuration
-FASTAPI_URL = "https://data-assistant-m4kl.onrender.com"
+FASTAPI_URL = get_secret("api.fastapi_url", "FASTAPI_URL", "https://data-assistant-m4kl.onrender.com")
 UPLOAD_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/file-upload"
 HEALTH_ENDPOINT = f"{FASTAPI_URL}/health"
 CONFIG_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/config"
 SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 # MCP Configuration
-MCP_SERVER_URL = "https://data-analyst-mcp-server.onrender.com/data/mcp"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")  # Fallback to gpt-4o if gpt-5.1 not available
+MCP_SERVER_URL = get_secret("api.mcp_server_url", "MCP_SERVER_URL", "https://data-analyst-mcp-server.onrender.com/data/mcp")
+OPENAI_API_KEY = get_secret("openai.api_key", "OPENAI_API_KEY")
+OPENAI_MODEL = get_secret("openai.model", "OPENAI_MODEL", "gpt-4o")  # Fallback to gpt-4o if not specified
 
 # Page configuration
 st.set_page_config(
