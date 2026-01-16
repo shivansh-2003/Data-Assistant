@@ -27,7 +27,6 @@ httpx
 # Database (Supabase/Postgres)
 SQLAlchemy
 psycopg2-binary
-s
 
 # MCP Server
 mcp
