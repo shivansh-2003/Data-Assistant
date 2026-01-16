@@ -1717,4 +1717,3 @@ print(f"Redis connected: {is_connected()}")
 ---
 
 **Built with ❤️ for data analysts**
-

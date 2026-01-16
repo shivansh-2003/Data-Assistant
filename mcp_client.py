@@ -14,8 +14,8 @@ from langchain_core.callbacks import BaseCallbackHandler
 
 
 # Configuration
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp")
-INGESTION_API_URL = os.getenv("INGESTION_API_URL", "http://127.0.0.1:8001")
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "https://data-analyst-mcp-server.onrender.com/data/mcp")
+INGESTION_API_URL = os.getenv("INGESTION_API_URL", "https://data-assistant-m4kl.onrender.com")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.1")  # Using GPT-5.1 as requested
 # Note: If GPT-5.1 is not available, fallback to latest model

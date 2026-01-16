@@ -219,8 +219,8 @@ class DashboardBuilder:
                                 st.plotly_chart(fig, width='stretch', theme="streamlit", key=chart_key)
                                 
                                 # Chart info and controls
-                                expander_key = f"chart_info_{chart_entry['id']}_{row}_{col_idx}"
-                                with st.expander(f"Chart {chart_idx + 1} Info", expanded=False, key=expander_key):
+                                # Note: expander doesn't need a key parameter - Streamlit handles uniqueness
+                                with st.expander(f"Chart {chart_idx + 1} Info", expanded=False):
                                     st.caption(f"**Mode:** {config.get('mode', 'basic')}")
                                     st.caption(f"**X:** {config.get('x_col', 'N/A')}")
                                     st.caption(f"**Y:** {config.get('y_col', 'N/A')}")
