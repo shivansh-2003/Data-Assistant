@@ -179,7 +179,7 @@ def display_message_history(messages: list, viz_figure=None, insight_data=None, 
                 # Display with fixed height and scrolling
                 st.dataframe(
                     df,
-                    use_container_width=True,
+                    width='stretch',
                     height=min(400, (rows + 1) * 35 + 3),  # Max 400px, auto-adjust for small results
                     hide_index=True
                 )
@@ -187,7 +187,7 @@ def display_message_history(messages: list, viz_figure=None, insight_data=None, 
     # Display visualization (takes precedence over DataFrame)
     if viz_figure is not None and last_ai_message_idx is not None:
         with st.chat_message("assistant"):
-            st.plotly_chart(viz_figure, use_container_width=True, key=f"viz_{last_ai_message_idx}")
+            st.plotly_chart(viz_figure, width='stretch', key=f"viz_{last_ai_message_idx}")
 
 
 def generate_chart_from_config_ui(viz_config: dict, session_id: str):

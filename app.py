@@ -14,6 +14,8 @@ import time
 import uuid
 import logging
 import graphviz
+import base64
+import pickle
 from datetime import datetime
 from data_visualization import render_visualization_tab
 from chatbot.streamlit_ui import render_chatbot_tab
@@ -332,12 +334,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+@st.cache_data(ttl=30, show_spinner=False)
 def check_api_health() -> bool:
     """Check if FastAPI server is running."""
     try:
-        response = requests.get(HEALTH_ENDPOINT, timeout=2)
+        response = requests.get(HEALTH_ENDPOINT, timeout=5)
         return response.status_code == 200
-    except:
+    except requests.exceptions.RequestException:
         return False
 
 
@@ -399,6 +402,8 @@ def upload_supabase(connection_string: str, schema: str = "public",
         return response.json()
     except requests.exceptions.RequestException as e:
         return {"success": False, "error": str(e)}
+
+
 
 
 def delete_redis_session(session_id: str) -> bool:
@@ -502,11 +507,42 @@ def get_session_metadata_for_display(session_id: str) -> Optional[Dict]:
         return None
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_full_table_dataframe(session_id: str, table_name: str) -> Optional[pd.DataFrame]:
+    """Fetch full table data from backend and deserialize into a DataFrame."""
+    try:
+        response = requests.get(
+            f"{SESSION_ENDPOINT}/{session_id}/tables",
+            params={"format": "full"},
+            timeout=30
+        )
+        response.raise_for_status()
+        data = response.json()
+        for table_info in data.get("tables", []):
+            if table_info.get("table_name") == table_name:
+                payload = table_info.get("data")
+                if not payload:
+                    return None
+                decoded = base64.b64decode(payload)
+                return pickle.loads(decoded)
+        return None
+    except requests.exceptions.RequestException:
+        return None
+    except Exception:
+        return None
 
 
-def display_table_info(table_info: Dict, table_index: int):
+
+
+def display_table_info(
+    table_info: Dict,
+    table_index: int,
+    session_id: Optional[str] = None,
+    table_name: Optional[str] = None
+):
     """Display information about a single table."""
-    st.subheader(f"📋 Table {table_index + 1}")
+    display_name = table_name or table_info.get("table_name") or f"Table {table_index + 1}"
+    st.subheader(f"📋 {display_name}")
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -525,27 +561,30 @@ def display_table_info(table_info: Dict, table_index: int):
         })
         st.dataframe(col_df, width='stretch')
     
-    # Display preview data
-    if table_info.get('preview'):
-        st.subheader("👀 Data Preview (First 10 rows)")
-        preview_df = pd.DataFrame(table_info['preview'])
-        filtered_df = render_advanced_table(
-            preview_df,
-            key_prefix=f"preview_table_{table_index}",
-            height=320,
-            page_size_default=10
-        )
-        
-        # Download button for full data
-        export_df = filtered_df if filtered_df is not None else preview_df
-        csv = export_df.to_csv(index=False)
-        st.download_button(
-            label=f"📥 Download Table {table_index + 1} as CSV",
-            data=csv,
-            file_name=f"table_{table_index + 1}.csv",
-            mime="text/csv",
-            key=f"download_{table_index}"
-        )
+    # Display full data table (no preview)
+    if session_id and table_name:
+        full_df = get_full_table_dataframe(session_id, table_name)
+        if full_df is not None and not full_df.empty:
+            st.subheader("📊 Data Explorer")
+            filtered_df = render_advanced_table(
+                full_df,
+                key_prefix=f"table_{table_index}_{table_name}",
+                height=320,
+                page_size_default=10
+            )
+            
+            # Download button for full data
+            export_df = filtered_df if filtered_df is not None else full_df
+            csv = export_df.to_csv(index=False)
+            st.download_button(
+                label=f"📥 Download {display_name} as CSV",
+                data=csv,
+                file_name=f"{display_name}.csv",
+                mime="text/csv",
+                key=f"download_{table_index}"
+            )
+        else:
+            st.warning("Full table data is not available yet. Please try again.")
 
 
 def render_ingestion_result(result: Dict, session_id_input: Optional[str] = None):
@@ -581,16 +620,26 @@ def render_ingestion_result(result: Dict, session_id_input: Optional[str] = None
         tables = result.get("tables", [])
         if tables:
             st.header(f"📊 Extracted Tables ({len(tables)})")
+            session_id = result.get("session_id")
+            tables_data = get_session_tables_for_display(session_id) if session_id else None
+            tables_map = tables_data.get("tables", {}) if tables_data else {}
+            table_names = list(tables_map.keys())
             
             if len(tables) > 1:
-                tab_names = [f"Table {i+1}" for i in range(len(tables))]
+                tab_names = [table_names[i] if i < len(table_names) else f"Table {i+1}" for i in range(len(tables))]
                 tabs = st.tabs(tab_names)
                 
                 for idx, tab in enumerate(tabs):
                     with tab:
-                        display_table_info(tables[idx], idx)
+                        if idx < len(table_names):
+                            table_name = table_names[idx]
+                            display_table_info(tables_map.get(table_name, tables[idx]), idx, session_id, table_name)
+                        else:
+                            display_table_info(tables[idx], idx, session_id, None)
             else:
-                display_table_info(tables[0], 0)
+                table_name = table_names[0] if table_names else None
+                table_info = tables_map.get(table_name, tables[0]) if table_name else tables[0]
+                display_table_info(table_info, 0, session_id, table_name)
         else:
             st.warning("No tables found in the uploaded file.")
     else:
@@ -616,6 +665,11 @@ def initialize_session_state():
     
     if "last_file_id" not in st.session_state:
         st.session_state.last_file_id = None
+    
+    if "last_ingestion_result" not in st.session_state:
+        st.session_state.last_ingestion_result = None
+    if "last_ingestion_file_id" not in st.session_state:
+        st.session_state.last_ingestion_file_id = None
     
     # Operation history
     if "operation_history" not in st.session_state:
@@ -674,6 +728,8 @@ def render_upload_tab():
     if st.session_state.last_file_id and current_file_id != st.session_state.last_file_id:
         # File was removed or changed - cleanup old session
         cleanup_current_session()
+        st.session_state.last_ingestion_result = None
+        st.session_state.last_ingestion_file_id = None
     st.session_state.last_file_id = current_file_id
     
     # Optional file type hint
@@ -703,13 +759,22 @@ def render_upload_tab():
                 progress.progress(0.2, text="Uploading file")
                 result = upload_file(uploaded_file, file_type, session_id if session_id else None)
                 progress.progress(0.8, text="Extracting tables")
+                st.session_state.last_ingestion_result = result
+                st.session_state.last_ingestion_file_id = current_file_id
                 render_ingestion_result(result, session_id_input=session_id)
                 progress.progress(1.0, text="Completed")
                 status.update(label="Processing complete", state="complete")
+        elif (
+            st.session_state.last_ingestion_result
+            and st.session_state.last_ingestion_file_id == current_file_id
+        ):
+            render_ingestion_result(st.session_state.last_ingestion_result, session_id_input=session_id)
     
     else:
         # No file uploaded - cleanup any existing session
         cleanup_current_session()
+        st.session_state.last_ingestion_result = None
+        st.session_state.last_ingestion_file_id = None
         
         # Show instructions when no file is uploaded
         st.info("👆 Please upload a file to get started")
@@ -1261,22 +1326,20 @@ def render_manipulation_tab():
     
     st.divider()
     
-    # Current Data Preview
-    st.subheader("👀 Current Data Preview")
+    # Current Data Explorer
+    st.subheader("📊 Current Data Explorer")
     if tables and selected_table:
-        table_info = tables[selected_table]
-        preview_data = table_info.get("preview", [])
-        if preview_data:
-            preview_df = pd.DataFrame(preview_data)
+        full_df = get_full_table_dataframe(session_id, selected_table)
+        if full_df is not None and not full_df.empty:
             filtered_df = render_advanced_table(
-                preview_df,
-                key_prefix=f"current_preview_{selected_table}",
+                full_df,
+                key_prefix=f"current_full_{selected_table}",
                 height=320,
                 page_size_default=10
             )
             
             # Download button
-            export_df = filtered_df if filtered_df is not None else preview_df
+            export_df = filtered_df if filtered_df is not None else full_df
             csv = export_df.to_csv(index=False)
             st.download_button(
                 label="📥 Download Current Data as CSV",
@@ -1285,7 +1348,7 @@ def render_manipulation_tab():
                 mime="text/csv"
             )
         else:
-            st.info("No preview data available.")
+            st.info("Full table data not available.")
 
 
 def main():
@@ -1348,14 +1411,20 @@ def main():
         
         # API Health Check
         st.subheader("API Status")
-        if check_api_health():
+        api_ok = check_api_health()
+        if api_ok:
+            st.session_state["last_api_ok"] = True
             st.success("✅ FastAPI server is running")
             st.markdown('<span class="status-badge">Online</span>', unsafe_allow_html=True)
         else:
-            st.error("❌ FastAPI server is not running")
+            # If the health check fails transiently, keep the app usable.
+            was_ok = st.session_state.get("last_api_ok", False)
+            if was_ok:
+                st.warning("⚠️ FastAPI health check failed (temporary).")
+            else:
+                st.error("❌ FastAPI server is not running")
             st.markdown('<span class="status-badge">Offline</span>', unsafe_allow_html=True)
             st.warning("Please start the FastAPI server:\n```bash\npython main.py\n```")
-            st.stop()
         
         # MCP Server Status
         st.subheader("MCP Server Status")
