@@ -7,6 +7,8 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
+import json
+import io
 from typing import Optional
 import requests
 import os
@@ -17,6 +19,7 @@ from .smart_recommendations import get_chart_recommendations
 from .chart_compositions import generate_combo_chart
 # Import dashboard builder
 from .dashboard_builder import DashboardBuilder
+from components.data_table import render_advanced_table
 
 # Create default builder instance
 _default_dashboard_builder = DashboardBuilder()
@@ -29,6 +32,7 @@ FASTAPI_URL = os.getenv("FASTAPI_URL", "https://data-assistant-m4kl.onrender.com
 SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 
+@st.cache_data(ttl=30, show_spinner=False)
 def get_dataframe_from_session(session_id: str, table_name: str) -> Optional[pd.DataFrame]:
     """
     Fetch session data and convert preview to DataFrame.
@@ -75,10 +79,17 @@ def get_dataframe_from_session(session_id: str, table_name: str) -> Optional[pd.
         return None
 
 
-def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str], 
-                   y_col: Optional[str], agg_func: str = 'none', 
-                   color_col: Optional[str] = None,
-                   heatmap_columns: Optional[list] = None) -> go.Figure:
+def generate_chart(
+    df: pd.DataFrame,
+    chart_type: str,
+    x_col: Optional[str],
+    y_col: Optional[str],
+    agg_func: str = 'none',
+    color_col: Optional[str] = None,
+    heatmap_columns: Optional[list] = None,
+    title_override: Optional[str] = None,
+    color_palette: Optional[list] = None
+) -> go.Figure:
     """
     Generate Plotly figure based on user selections.
     Supports: bar, line, scatter, area, box, histogram, pie, heatmap.
@@ -112,59 +123,108 @@ def generate_chart(df: pd.DataFrame, chart_type: str, x_col: Optional[str],
     try:
         if chart_type == 'bar':
             if y_col and y_col in df_agg.columns and x_col and x_col in df_agg.columns:
-                fig = px.bar(df_agg, x=x_col, y=y_col, color=color_col if color_col and color_col != 'None' else None,
-                           title=f"Bar Chart: {y_col} by {x_col}")
+                fig = px.bar(
+                    df_agg,
+                    x=x_col,
+                    y=y_col,
+                    color=color_col if color_col and color_col != 'None' else None,
+                    title=title_override or f"Bar Chart: {y_col} by {x_col}",
+                    color_discrete_sequence=color_palette
+                )
             elif x_col and x_col in df_agg.columns:
                 # Count chart if only X is provided
                 value_counts = df_agg[x_col].value_counts().head(20)  # Limit to top 20 for performance
-                fig = px.bar(x=value_counts.index, y=value_counts.values, 
-                           title=f"Bar Chart: Count by {x_col}")
+                fig = px.bar(
+                    x=value_counts.index,
+                    y=value_counts.values,
+                    title=title_override or f"Bar Chart: Count by {x_col}",
+                    color_discrete_sequence=color_palette
+                )
             else:
                 fig = create_error_figure(f"Bar chart requires at least X column. Available columns: {list(df_agg.columns)}")
                 
         elif chart_type == 'line':
             if y_col and y_col in df_agg.columns and x_col and x_col in df_agg.columns:
-                fig = px.line(df_agg, x=x_col, y=y_col, color=color_col if color_col and color_col != 'None' else None,
-                            title=f"Line Chart: {y_col} over {x_col}")
+                fig = px.line(
+                    df_agg,
+                    x=x_col,
+                    y=y_col,
+                    color=color_col if color_col and color_col != 'None' else None,
+                    title=title_override or f"Line Chart: {y_col} over {x_col}",
+                    color_discrete_sequence=color_palette
+                )
             else:
                 fig = create_error_figure("Line chart requires both X and Y columns")
                 
         elif chart_type == 'scatter':
             if y_col and y_col in df_agg.columns and x_col and x_col in df_agg.columns:
-                fig = px.scatter(df_agg, x=x_col, y=y_col, color=color_col if color_col and color_col != 'None' else None,
-                               title=f"Scatter: {y_col} vs {x_col}")
+                fig = px.scatter(
+                    df_agg,
+                    x=x_col,
+                    y=y_col,
+                    color=color_col if color_col and color_col != 'None' else None,
+                    title=title_override or f"Scatter: {y_col} vs {x_col}",
+                    color_discrete_sequence=color_palette
+                )
             else:
                 fig = create_error_figure(f"Scatter chart requires both X and Y columns. Available columns: {list(df_agg.columns)}")
                 
         elif chart_type == 'area':
             if y_col and y_col in df_agg.columns and x_col and x_col in df_agg.columns:
-                fig = px.area(df_agg, x=x_col, y=y_col, color=color_col if color_col and color_col != 'None' else None,
-                            title=f"Area Chart: {y_col} over {x_col}")
+                fig = px.area(
+                    df_agg,
+                    x=x_col,
+                    y=y_col,
+                    color=color_col if color_col and color_col != 'None' else None,
+                    title=title_override or f"Area Chart: {y_col} over {x_col}",
+                    color_discrete_sequence=color_palette
+                )
             else:
                 fig = create_error_figure("Area chart requires both X and Y columns")
                 
         elif chart_type == 'box':
             if y_col and y_col in df_agg.columns:
-                fig = px.box(df_agg, x=x_col if x_col and x_col != 'None' else None, y=y_col,
-                           color=color_col if color_col and color_col != 'None' else None,
-                           title=f"Box Plot: {y_col}" + (f" by {x_col}" if x_col and x_col != 'None' else ""))
+                fig = px.box(
+                    df_agg,
+                    x=x_col if x_col and x_col != 'None' else None,
+                    y=y_col,
+                    color=color_col if color_col and color_col != 'None' else None,
+                    title=title_override or (f"Box Plot: {y_col}" + (f" by {x_col}" if x_col and x_col != 'None' else "")),
+                    color_discrete_sequence=color_palette
+                )
             else:
                 fig = create_error_figure("Box plot requires Y column")
                 
         elif chart_type == 'histogram':
             if x_col and x_col in df_agg.columns:
-                fig = px.histogram(df_agg, x=x_col, color=color_col if color_col and color_col != 'None' else None,
-                                 title=f"Histogram: Distribution of {x_col}")
+                fig = px.histogram(
+                    df_agg,
+                    x=x_col,
+                    color=color_col if color_col and color_col != 'None' else None,
+                    title=title_override or f"Histogram: Distribution of {x_col}",
+                    color_discrete_sequence=color_palette
+                )
             else:
                 fig = create_error_figure(f"Histogram requires X column. Available columns: {list(df_agg.columns)}")
                 
         elif chart_type == 'pie':
             if y_col and y_col in df_agg.columns:
                 df_pie = df_agg.groupby(y_col).size().reset_index(name='count')
-                fig = px.pie(df_pie, values='count', names=y_col, title=f"Pie: Distribution of {y_col}")
+                fig = px.pie(
+                    df_pie,
+                    values='count',
+                    names=y_col,
+                    title=title_override or f"Pie: Distribution of {y_col}",
+                    color_discrete_sequence=color_palette
+                )
             elif x_col and x_col in df_agg.columns:
                 value_counts = df_agg[x_col].value_counts()
-                fig = px.pie(values=value_counts.values, names=value_counts.index, title=f"Pie: Distribution of {x_col}")
+                fig = px.pie(
+                    values=value_counts.values,
+                    names=value_counts.index,
+                    title=title_override or f"Pie: Distribution of {x_col}",
+                    color_discrete_sequence=color_palette
+                )
             else:
                 fig = create_error_figure("Pie chart requires at least one column")
                 
@@ -333,6 +393,26 @@ def render_visualization_tab():
     if df is None or df.empty:
         st.warning("⚠️ No data available for visualization. The table may be empty.")
         return
+
+    def _column_label(col_name: str) -> str:
+        if col_name == 'None':
+            return "— None"
+        if pd.api.types.is_numeric_dtype(df[col_name]):
+            return f"🔢 {col_name}"
+        return f"🔤 {col_name}"
+
+    def _chart_label(chart_name: str) -> str:
+        mapping = {
+            'bar': '📊 Bar',
+            'line': '📈 Line',
+            'scatter': '🔵 Scatter',
+            'area': '🌊 Area',
+            'box': '📦 Box',
+            'histogram': '📊 Histogram',
+            'pie': '🥧 Pie',
+            'heatmap': '🔥 Heatmap'
+        }
+        return mapping.get(chart_name, chart_name)
     
     # Show data info
     col1, col2, col3 = st.columns(3)
@@ -480,6 +560,23 @@ def render_visualization_tab():
                         st.markdown("---")
     
     st.divider()
+
+    # Quick templates for fast setup
+    st.subheader("⚡ Quick Chart Templates")
+    st.caption("Apply a recommended configuration with one click.")
+    qt1, qt2, qt3, qt4 = st.columns(4)
+    with qt1:
+        if st.button("📊 Bar: Category vs Value", key="qt_bar"):
+            st.session_state['viz_chart_type'] = 'bar'
+    with qt2:
+        if st.button("📈 Line: Trend over Time", key="qt_line"):
+            st.session_state['viz_chart_type'] = 'line'
+    with qt3:
+        if st.button("🔵 Scatter: Relationship", key="qt_scatter"):
+            st.session_state['viz_chart_type'] = 'scatter'
+    with qt4:
+        if st.button("📊 Histogram: Distribution", key="qt_hist"):
+            st.session_state['viz_chart_type'] = 'histogram'
     
     # Chart Mode Selection (Basic vs Compositions)
     if 'viz_chart_mode' not in st.session_state:
@@ -520,6 +617,7 @@ def render_visualization_tab():
             chart_type = st.selectbox(
                 "Chart Type",
                 options=chart_options,
+                format_func=_chart_label,
                 help="Bar for categories, Line for trends, Scatter for correlations, etc.",
                 key="viz_chart_type"
             )
@@ -550,7 +648,8 @@ def render_visualization_tab():
             # Don't use index parameter as it conflicts with key
             x_col = st.selectbox(
                 "X-Axis (or Category)", 
-                options=cols, 
+                options=cols,
+                format_func=_column_label,
                 key="viz_x_col"
             )
         
@@ -577,7 +676,8 @@ def render_visualization_tab():
             # Don't use index parameter as it conflicts with key
             y_col = st.selectbox(
                 "Y-Axis (or Value)", 
-                options=cols, 
+                options=cols,
+                format_func=_column_label,
                 key="viz_y_col"
             )
         
@@ -592,7 +692,8 @@ def render_visualization_tab():
             
             color_col = st.selectbox(
                 "Color/Group By (Optional)", 
-                options=cols, 
+                options=cols,
+                format_func=_column_label,
                 key="viz_color_col"
             )
         
@@ -655,6 +756,30 @@ def render_visualization_tab():
                 st.caption("Aggregation\n(requires numeric Y)")
         with col_agg2:
             st.caption("💡 Tip: Select columns above to generate chart instantly")
+
+        # Styling options
+        st.markdown("---")
+        style_col1, style_col2 = st.columns([2, 2])
+        with style_col1:
+            chart_title = st.text_input(
+                "Chart Title (optional)",
+                placeholder="e.g., Revenue by Region",
+                key="viz_title"
+            )
+        with style_col2:
+            palette_options = {
+                "Default": None,
+                "Vibrant": px.colors.qualitative.Bold,
+                "Pastel": px.colors.qualitative.Pastel,
+                "Prism": px.colors.qualitative.Prism,
+                "Dark24": px.colors.qualitative.Dark24
+            }
+            palette_choice = st.selectbox(
+                "Color Palette",
+                options=list(palette_options.keys()),
+                key="viz_palette"
+            )
+            color_palette = palette_options.get(palette_choice)
     
     # Composition-specific controls
     composition_params = {}
@@ -760,7 +885,9 @@ def render_visualization_tab():
                     y_col if y_col != 'None' else None, 
                     agg_func,
                     color_col if color_col != 'None' else None,
-                    heatmap_columns if chart_type == 'heatmap' else None
+                    heatmap_columns if chart_type == 'heatmap' else None,
+                    chart_title if chart_title else None,
+                    color_palette
                 )
             elif chart_mode == 'combo':
                 fig = generate_combo_chart(
@@ -781,7 +908,10 @@ def render_visualization_tab():
                     x_col if x_col != 'None' else None,
                     y_col if y_col != 'None' else None, 
                     agg_func,
-                    color_col if color_col != 'None' else None
+                    color_col if color_col != 'None' else None,
+                    None,
+                    chart_title if chart_title else None,
+                    color_palette
                 )
             else:
                 # Fallback to basic chart
@@ -791,7 +921,10 @@ def render_visualization_tab():
                     x_col if x_col != 'None' else None,
                     y_col if y_col != 'None' else None, 
                     agg_func,
-                    color_col if color_col != 'None' else None
+                    color_col if color_col != 'None' else None,
+                    None,
+                    chart_title if chart_title else None,
+                    color_palette
                 )
         
         # Display interactive Plotly chart
@@ -826,7 +959,7 @@ def render_visualization_tab():
         
         # Data table below chart (optional toggle)
         if st.checkbox("Show Raw Data Preview", key="viz_table"):
-            st.dataframe(df, width='stretch', height=300)
+            render_advanced_table(df, key_prefix=f"viz_raw_{selected_table}", height=320, page_size_default=25)
         
         # One-click Exports
         st.divider()
@@ -883,6 +1016,129 @@ def render_visualization_tab():
                 )
             except Exception as e:
                 st.error(f"HTML export failed: {e}")
+
+        st.markdown("---")
+        st.subheader("📦 Export More Formats")
+        st.caption("Generate reports and reusable code for your chart.")
+        e1, e2, e3 = st.columns(3)
+        with e1:
+            try:
+                pdf_bytes = fig.to_image(format="pdf", width=1200, height=export_height)
+                st.download_button(
+                    "📄 Download PDF",
+                    pdf_bytes,
+                    f"chart_{export_chart_name}_{selected_table}.pdf",
+                    "application/pdf",
+                    key="download_pdf",
+                    width='stretch'
+                )
+            except Exception as e:
+                st.error(f"PDF export failed: {e}")
+                st.caption("💡 Install kaleido: `pip install kaleido`")
+        with e2:
+            python_script = f"""import pandas as pd
+import plotly.express as px
+
+# Load your data
+# df = pd.read_csv("{selected_table}_current.csv")
+
+# Example chart
+fig = px.{chart_type}(
+    df,
+    x={repr(x_col if x_col != 'None' else None)},
+    y={repr(y_col if y_col != 'None' else None)},
+    color={repr(color_col if color_col != 'None' else None)}
+)
+fig.show()
+"""
+            st.download_button(
+                "🐍 Download Python",
+                python_script.encode(),
+                f"chart_{export_chart_name}_{selected_table}.py",
+                "text/x-python",
+                key="download_python",
+                width='stretch'
+            )
+        with e3:
+            notebook = {
+                "cells": [
+                    {
+                        "cell_type": "markdown",
+                        "metadata": {},
+                        "source": [f"# Chart Export: {export_chart_name}\n"]
+                    },
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": [
+                            "import pandas as pd\n",
+                            "import plotly.express as px\n\n",
+                            f"# df = pd.read_csv(\"{selected_table}_current.csv\")\n",
+                            "df.head()\n"
+                        ]
+                    },
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": [
+                            f"fig = px.{chart_type}(df, x={repr(x_col if x_col != 'None' else None)}, ",
+                            f"y={repr(y_col if y_col != 'None' else None)}, ",
+                            f"color={repr(color_col if color_col != 'None' else None)})\n",
+                            "fig.show()\n"
+                        ]
+                    }
+                ],
+                "metadata": {
+                    "kernelspec": {
+                        "display_name": "Python 3",
+                        "language": "python",
+                        "name": "python3"
+                    },
+                    "language_info": {
+                        "name": "python",
+                        "version": "3.x"
+                    }
+                },
+                "nbformat": 4,
+                "nbformat_minor": 5
+            }
+            st.download_button(
+                "📓 Download Notebook",
+                json.dumps(notebook, indent=2).encode(),
+                f"chart_{export_chart_name}_{selected_table}.ipynb",
+                "application/json",
+                key="download_notebook",
+                width='stretch'
+            )
+
+        ppt_col, _, _ = st.columns(3)
+        with ppt_col:
+            try:
+                from pptx import Presentation
+                img_bytes = fig.to_image(format="png", width=1200, height=export_height)
+                prs = Presentation()
+                slide_layout = prs.slide_layouts[5]
+                slide = prs.slides.add_slide(slide_layout)
+                image_stream = io.BytesIO(img_bytes)
+                slide.shapes.add_picture(image_stream, left=0, top=0, width=prs.slide_width)
+                pptx_stream = io.BytesIO()
+                prs.save(pptx_stream)
+                st.download_button(
+                    "📊 Download PowerPoint",
+                    pptx_stream.getvalue(),
+                    f"chart_{export_chart_name}_{selected_table}.pptx",
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    key="download_pptx",
+                    width='stretch'
+                )
+            except ImportError:
+                st.caption("💡 Install python-pptx: `pip install python-pptx`")
+            except Exception as e:
+                st.error(f"PowerPoint export failed: {e}")
     
     elif not validation_message:
         # No columns selected and no validation message
@@ -904,4 +1160,3 @@ def render_visualization_tab():
     # Dashboard View Section
     st.divider()
     dashboard_active = _default_dashboard_builder.render_tab(df, selected_table)
-

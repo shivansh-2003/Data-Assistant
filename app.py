@@ -17,6 +17,7 @@ import graphviz
 from datetime import datetime
 from data_visualization import render_visualization_tab
 from chatbot.streamlit_ui import render_chatbot_tab
+from components.data_table import render_advanced_table
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,66 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Theme and UI state initialization
+if "ui_theme" not in st.session_state:
+    st.session_state.ui_theme = "Auto"
+if "show_shortcuts" not in st.session_state:
+    st.session_state.show_shortcuts = False
+if "onboarding_step" not in st.session_state:
+    st.session_state.onboarding_step = 0
+if "show_onboarding" not in st.session_state:
+    st.session_state.show_onboarding = True
+
+def _resolve_theme_choice(choice: str) -> str:
+    if choice == "Auto":
+        return "auto"
+    return "dark" if choice == "Dark" else "light"
+
+def apply_theme_script(theme: str):
+    """Apply theme by setting data-theme attribute on the document element."""
+    st.markdown(
+        f"""
+        <script>
+        (function() {{
+            const theme = "{theme}";
+            if (theme === "auto") {{
+                const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+            }} else {{
+                document.documentElement.setAttribute('data-theme', theme);
+            }}
+        }})();
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
+
+def inject_keyboard_shortcuts():
+    """Global keyboard shortcuts via query params to trigger UI helpers."""
+    st.markdown(
+        """
+        <script>
+        (function() {
+            const handler = (event) => {
+                const isCmd = event.metaKey || event.ctrlKey;
+                if (event.key === '?' && !isCmd) {
+                    const url = new URL(window.location.href);
+                    url.searchParams.set('shortcuts', '1');
+                    window.location.href = url.toString();
+                }
+                if (isCmd && event.key.toLowerCase() === 'k') {
+                    const url = new URL(window.location.href);
+                    url.searchParams.set('command_palette', '1');
+                    window.location.href = url.toString();
+                }
+            };
+            document.addEventListener('keydown', handler);
+        })();
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
+
 # Custom CSS for better styling
 st.markdown("""
     <style>
@@ -73,10 +134,37 @@ st.markdown("""
         --muted: #6b7280;
         --border: #e5e7eb;
         --card-bg: #ffffff;
-        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-        --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.08);
+        --shadow-sm: 0 4px 14px rgba(15, 23, 42, 0.08);
+        --shadow-md: 0 16px 40px rgba(15, 23, 42, 0.14);
         --radius-sm: 8px;
         --radius-md: 12px;
+        --radius-lg: 18px;
+        --glass-bg: rgba(255, 255, 255, 0.65);
+        --glass-border: rgba(255, 255, 255, 0.4);
+        --focus-ring: rgba(31, 119, 180, 0.35);
+    }
+
+    [data-theme="dark"] {
+        --primary: #60a5fa;
+        --primary-600: #3b82f6;
+        --primary-50: #0b1220;
+        --accent: #f59e0b;
+        --success: #34d399;
+        --warning: #fbbf24;
+        --error: #f87171;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+        --border: #1f2937;
+        --card-bg: #0f172a;
+        --shadow-sm: 0 6px 18px rgba(0, 0, 0, 0.35);
+        --shadow-md: 0 20px 45px rgba(0, 0, 0, 0.5);
+        --glass-bg: rgba(15, 23, 42, 0.7);
+        --glass-border: rgba(148, 163, 184, 0.2);
+        --focus-ring: rgba(96, 165, 250, 0.35);
+    }
+
+    body {
+        color: var(--text);
     }
 
     /* Skip link for keyboard users */
@@ -124,24 +212,44 @@ st.markdown("""
         background: var(--primary-50);
         color: var(--primary-600);
         border: 1px solid var(--border);
+        animation: pulse 2.4s ease-in-out infinite;
     }
     .card {
-        background: var(--card-bg);
-        border: 1px solid var(--border);
-        border-radius: var(--radius-md);
-        padding: 16px;
+        background: var(--glass-bg);
+        border: 1px solid var(--glass-border);
+        border-radius: var(--radius-lg);
+        padding: 18px;
         box-shadow: var(--shadow-sm);
+        backdrop-filter: blur(14px);
+    }
+    .glass-card {
+        background: var(--glass-bg);
+        border: 1px solid var(--glass-border);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-md);
+        backdrop-filter: blur(18px);
+        padding: 18px;
+    }
+    .chip-button button {
+        border-radius: 999px;
+        padding: 6px 12px;
+        background: rgba(31, 119, 180, 0.08);
+        border: 1px solid var(--border);
+    }
+    .chip-button button:hover {
+        background: rgba(31, 119, 180, 0.18);
     }
 
     /* Streamlit component styling */
     .stButton > button {
         border-radius: 10px;
         font-weight: 600;
-        transition: all 120ms ease-in-out;
+        transition: all 180ms ease-in-out;
     }
     .stButton > button:focus {
         outline: 2px solid var(--primary);
         outline-offset: 2px;
+        box-shadow: 0 0 0 6px var(--focus-ring);
     }
     .stButton > button:hover {
         transform: translateY(-1px);
@@ -153,6 +261,10 @@ st.markdown("""
         border-radius: var(--radius-sm);
         padding: 10px 12px;
         box-shadow: var(--shadow-sm);
+        transition: transform 160ms ease;
+    }
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-2px);
     }
     div[data-testid="stExpander"] {
         border: 1px solid var(--border);
@@ -180,6 +292,24 @@ st.markdown("""
         border-radius: 12px;
         padding: 8px 10px;
         box-shadow: var(--shadow-sm);
+    }
+
+    /* Scrollbar styling */
+    ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: rgba(148, 163, 184, 0.45);
+        border-radius: 999px;
+    }
+    ::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 0.9; }
+        50% { opacity: 0.6; }
     }
 
     /* Responsive adjustments */
@@ -211,6 +341,7 @@ def check_api_health() -> bool:
         return False
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def get_api_config() -> Dict:
     """Get API configuration."""
     try:
@@ -398,10 +529,16 @@ def display_table_info(table_info: Dict, table_index: int):
     if table_info.get('preview'):
         st.subheader("👀 Data Preview (First 10 rows)")
         preview_df = pd.DataFrame(table_info['preview'])
-        st.dataframe(preview_df, width='stretch', height=400)
+        filtered_df = render_advanced_table(
+            preview_df,
+            key_prefix=f"preview_table_{table_index}",
+            height=320,
+            page_size_default=10
+        )
         
         # Download button for full data
-        csv = preview_df.to_csv(index=False)
+        export_df = filtered_df if filtered_df is not None else preview_df
+        csv = export_df.to_csv(index=False)
         st.download_button(
             label=f"📥 Download Table {table_index + 1} as CSV",
             data=csv,
@@ -485,10 +622,32 @@ def initialize_session_state():
         st.session_state.operation_history = []
 
 
+def render_onboarding_tip(title: str, steps: List[str], cta_label: Optional[str] = None, cta_key: Optional[str] = None):
+    """Render onboarding tips when enabled."""
+    if not st.session_state.get("show_onboarding", True):
+        return
+    with st.expander(f"✨ {title}", expanded=False):
+        for step in steps:
+            st.markdown(f"- {step}")
+        if cta_label:
+            st.button(cta_label, key=cta_key or f"cta_{title}", help="Quick action to get started")
+
+
 def render_upload_tab():
     """Render the Upload tab content."""
     st.header("📤 Upload File")
     st.caption("Upload a file to start exploring your data. We will extract tables and prepare them for analysis.")
+
+    render_onboarding_tip(
+        "Upload in 3 steps",
+        [
+            "Drag and drop a CSV, Excel, PDF, or image file.",
+            "Optionally set file type and session ID.",
+            "Click Upload & Process to extract tables."
+        ],
+        cta_label="Jump to upload",
+        cta_key="cta_upload_tab"
+    )
     
     # Quick steps
     step1, step2, step3 = st.columns(3)
@@ -539,11 +698,14 @@ def render_upload_tab():
             )
         
         if upload_button:
-            with st.spinner("Uploading and processing file..."):
-                # Upload file
+            with st.status("Uploading and processing file...", expanded=True) as status:
+                progress = st.progress(0)
+                progress.progress(0.2, text="Uploading file")
                 result = upload_file(uploaded_file, file_type, session_id if session_id else None)
-                
+                progress.progress(0.8, text="Extracting tables")
                 render_ingestion_result(result, session_id_input=session_id)
+                progress.progress(1.0, text="Completed")
+                status.update(label="Processing complete", state="complete")
     
     else:
         # No file uploaded - cleanup any existing session
@@ -596,9 +758,14 @@ def render_upload_tab():
             if not url_input:
                 st.warning("Please provide a valid URL.")
             else:
-                with st.spinner("Downloading and processing URL..."):
+                with st.status("Downloading and processing URL...", expanded=True) as status:
+                    progress = st.progress(0)
+                    progress.progress(0.2, text="Fetching file")
                     result = upload_url(url_input, url_file_type, url_session_id if url_session_id else None)
+                    progress.progress(0.8, text="Extracting tables")
                     render_ingestion_result(result, session_id_input=url_session_id)
+                    progress.progress(1.0, text="Completed")
+                    status.update(label="Processing complete", state="complete")
 
     st.divider()
     st.subheader("🧩 Import From Supabase")
@@ -628,20 +795,36 @@ def render_upload_tab():
             if not connection_string:
                 st.warning("Please provide a connection string.")
             else:
-                with st.spinner("Connecting to Supabase and importing tables..."):
+                with st.status("Connecting to Supabase and importing tables...", expanded=True) as status:
+                    progress = st.progress(0)
+                    progress.progress(0.3, text="Connecting to Supabase")
                     result = upload_supabase(
                         connection_string=connection_string,
                         schema=schema_name or "public",
                         session_id=supabase_session_id if supabase_session_id else None,
                         project_name=project_name or None
                     )
+                    progress.progress(0.9, text="Importing tables")
                     render_ingestion_result(result, session_id_input=supabase_session_id)
+                    progress.progress(1.0, text="Completed")
+                    status.update(label="Import complete", state="complete")
 
 
 def render_manipulation_tab():
     """Render the Data Manipulation tab content."""
     st.header("🔧 Data Manipulation")
     st.caption("Use natural language to transform your data. Each operation creates a new version you can revisit.")
+
+    render_onboarding_tip(
+        "Try a transformation",
+        [
+            "Pick a table and review the current state.",
+            "Type a natural language query (e.g., filter, sort, group).",
+            "Execute to create a new version in the history graph."
+        ],
+        cta_label="Use example query",
+        cta_key="cta_manipulation_example"
+    )
     
     session_id = st.session_state.get("current_session_id")
     
@@ -989,13 +1172,16 @@ def render_manipulation_tab():
             return
         
         # Execute query
-        with st.spinner("🤔 Processing your query... This may take a moment."):
+        with st.status("🤔 Processing your query...", expanded=True) as status:
+            progress = st.progress(0)
             try:
+                progress.progress(0.2, text="Sending query to analysis engine")
                 result = analyze_data_sync(session_id, query)
                 
                 if result.get("success"):
                     # Wait a bit for MCP server to update Redis
                     time.sleep(2)  # Increased wait time for Redis update
+                    progress.progress(0.7, text="Updating session state")
                     
                     # Verify the update was successful by checking if data changed
                     new_tables_data = get_session_tables_for_display(session_id)
@@ -1049,6 +1235,8 @@ def render_manipulation_tab():
                         "version_id": new_vid if 'new_vid' in locals() else None
                     })
                     
+                    progress.progress(1.0, text="Completed")
+                    status.update(label="Operation completed", state="complete")
                     st.success("✅ Operation completed successfully!")
                     st.info("💡 Data has been updated. Scroll down to see the changes.")
                     
@@ -1062,10 +1250,12 @@ def render_manipulation_tab():
                     st.rerun()
                 else:
                     error_msg = result.get("error", "Unknown error occurred")
+                    status.update(label="Operation failed", state="error")
                     st.error(f"❌ Operation failed: {error_msg}")
                     st.info("💡 You can try again with a different query.")
                     
             except Exception as e:
+                status.update(label="Operation failed", state="error")
                 st.error(f"❌ Unexpected error: {str(e)}")
                 st.exception(e)
     
@@ -1078,10 +1268,16 @@ def render_manipulation_tab():
         preview_data = table_info.get("preview", [])
         if preview_data:
             preview_df = pd.DataFrame(preview_data)
-            st.dataframe(preview_df, width='stretch', height=400)
+            filtered_df = render_advanced_table(
+                preview_df,
+                key_prefix=f"current_preview_{selected_table}",
+                height=320,
+                page_size_default=10
+            )
             
             # Download button
-            csv = preview_df.to_csv(index=False)
+            export_df = filtered_df if filtered_df is not None else preview_df
+            csv = export_df.to_csv(index=False)
             st.download_button(
                 label="📥 Download Current Data as CSV",
                 data=csv,
@@ -1097,6 +1293,37 @@ def main():
     
     # Initialize session state
     initialize_session_state()
+
+    # Apply theme and keyboard shortcuts
+    apply_theme_script(_resolve_theme_choice(st.session_state.ui_theme))
+    inject_keyboard_shortcuts()
+
+    # Shortcut overlays driven by query params
+    if "shortcuts" in st.query_params:
+        with st.expander("⌨️ Keyboard Shortcuts", expanded=True):
+            st.markdown("""
+            **Global Shortcuts**
+            - `?` → Toggle this panel
+            - `Cmd/Ctrl + K` → Command palette (quick actions)
+            - `Cmd/Ctrl + Enter` → Execute query (when focused)
+            - `Esc` → Close dialogs/expanders
+            """)
+            if st.button("Close", key="close_shortcuts"):
+                del st.query_params["shortcuts"]
+                st.rerun()
+    if "command_palette" in st.query_params:
+        with st.expander("🧭 Command Palette", expanded=True):
+            st.markdown("Quick actions to speed up your workflow.")
+            cp1, cp2, cp3 = st.columns(3)
+            with cp1:
+                st.button("📤 Upload file", key="cp_upload")
+            with cp2:
+                st.button("🔧 Run transformation", key="cp_transform")
+            with cp3:
+                st.button("📈 Build chart", key="cp_chart")
+            if st.button("Close", key="close_cp"):
+                del st.query_params["command_palette"]
+                st.rerun()
     
     # Accessibility: Skip link target
     st.markdown('<a class="skip-link" href="#main-content">Skip to main content</a>', unsafe_allow_html=True)
@@ -1109,6 +1336,15 @@ def main():
     # Sidebar
     with st.sidebar:
         st.header("⚙️ Settings")
+
+        st.subheader("🎨 Theme")
+        st.session_state.ui_theme = st.selectbox(
+            "Choose theme",
+            ["Auto", "Light", "Dark"],
+            index=["Auto", "Light", "Dark"].index(st.session_state.ui_theme),
+            help="Auto uses your system setting.",
+            key="theme_select"
+        )
         
         # API Health Check
         st.subheader("API Status")
@@ -1142,6 +1378,12 @@ def main():
                 st.write("**Supported formats:**")
                 for fmt, exts in supported.items():
                     st.write(f"- {fmt.upper()}: {', '.join(exts)}")
+
+        st.subheader("🚀 Onboarding")
+        if st.toggle("Show onboarding tips", value=st.session_state.show_onboarding, key="onboarding_toggle"):
+            st.session_state.show_onboarding = True
+        else:
+            st.session_state.show_onboarding = False
         
         st.divider()
         st.caption("Made with ❤️ for data analysts")

@@ -54,6 +54,22 @@ def render_chatbot_tab():
                 viz_figure = generate_chart_from_config_ui(viz_config, session_id)
             
             display_message_history(messages, viz_figure, insight_data, show_data=show_data)
+
+            # Quick action chips
+            st.markdown("**Quick actions**")
+            qa1, qa2, qa3, qa4 = st.columns(4)
+            with qa1:
+                if st.button("📊 Summary stats", key="qa_summary"):
+                    st.session_state["chat_prefill"] = "Show summary statistics for the main table"
+            with qa2:
+                if st.button("📈 Trend", key="qa_trend"):
+                    st.session_state["chat_prefill"] = "Plot the trend over time for the main metric"
+            with qa3:
+                if st.button("🔍 Top 10", key="qa_top10"):
+                    st.session_state["chat_prefill"] = "Show the top 10 rows by the primary numeric column"
+            with qa4:
+                if st.button("🎯 Correlation", key="qa_corr"):
+                    st.session_state["chat_prefill"] = "Show correlation between the two most important numeric columns"
         
         # Chat input
         handle_chat_input(session_id, config)
@@ -139,6 +155,14 @@ def display_message_history(messages: list, viz_figure=None, insight_data=None, 
             last_ai_message_idx = idx
             with st.chat_message("assistant"):
                 st.write(msg.content)
+                # Message actions
+                action_col1, action_col2, action_col3 = st.columns([1, 1, 6])
+                with action_col1:
+                    st.button("👍", key=f"like_{idx}")
+                with action_col2:
+                    st.button("👎", key=f"dislike_{idx}")
+                with action_col3:
+                    st.caption(datetime.now().strftime("Responded %H:%M:%S"))
     
     # Display DataFrame ONLY if there's NO visualization
     # (For filtering/listing queries without charts)
@@ -199,6 +223,9 @@ def generate_chart_from_config_ui(viz_config: dict, session_id: str):
 def handle_chat_input(session_id: str, config: dict):
     """Handle user chat input and invoke graph."""
     st.caption("Tip: Ask for a chart directly, e.g., 'Plot revenue by month as a line chart.'")
+    prefill = st.session_state.pop("chat_prefill", "")
+    if prefill:
+        st.info(f"Suggestion: {prefill}")
     user_input = st.chat_input("Ask anything about your data...")
     
     if user_input:
@@ -208,6 +235,10 @@ def handle_chat_input(session_id: str, config: dict):
         
         # Process query
         with st.spinner("🤔 Thinking..."):
+            typing_placeholder = st.empty()
+            with typing_placeholder.container():
+                with st.chat_message("assistant"):
+                    st.markdown("⌛ **InsightBot is thinking...**")
             try:
                 # Prepare state data
                 state_data = prepare_state_dataframes(session_id, st.session_state)
@@ -235,6 +266,7 @@ def handle_chat_input(session_id: str, config: dict):
                 result = graph.invoke(inputs, config)
                 
                 logger.info("Graph invoked successfully")
+                typing_placeholder.empty()
                 
                 # Rerun to display updated state
                 st.rerun()
