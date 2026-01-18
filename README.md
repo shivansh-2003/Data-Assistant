@@ -51,7 +51,8 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 | **FastAPI Backend** | https://data-assistant-m4kl.onrender.com | Render | ✅ Live |
 | **MCP Server** | https://data-analyst-mcp-server.onrender.com | Render | ✅ Live |
 
-**Quick Start - Use Live Deployment:**
+
+### **Quick Start - Use Live Deployment:**
 
 🌐 **Access the live app instantly (no setup required):**
 
@@ -144,73 +145,6 @@ graph TB
     style LLM fill:#f0e1ff
 ```
 
-### Data Flow Diagram
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant Streamlit
-    participant FastAPI
-    participant Redis
-    participant MCP
-    participant LLM
-    
-    User->>Streamlit: 1. Upload File
-    Streamlit->>FastAPI: POST /api/ingestion/file-upload
-    FastAPI->>FastAPI: Process File (CSV/Excel/PDF/Image)
-    FastAPI->>Redis: Store DataFrame + Metadata
-    Redis-->>FastAPI: Session ID
-    FastAPI-->>Streamlit: Session ID + Preview
-    Streamlit-->>User: Display Tables
-    
-    User->>Streamlit: 2. Enter Query ("remove rows where price > 100")
-    Streamlit->>MCP: analyze_data(session_id, query)
-    MCP->>LLM: Process Natural Language
-    LLM->>MCP: Tool Selection (filter_rows)
-    MCP->>Redis: Load DataFrame
-    Redis-->>MCP: DataFrame
-    MCP->>MCP: Apply Transformation
-    MCP->>Redis: Save Updated DataFrame
-    MCP-->>Streamlit: Success + Summary
-    Streamlit-->>User: Show Results
-    
-    User->>Streamlit: 3. Chat Query ("show distribution of sales")
-    Streamlit->>LLM: Pandas Agent Query
-    LLM->>Redis: Load DataFrame
-    Redis-->>LLM: DataFrame
-    LLM->>LLM: Analyze + Detect Visualization
-    LLM-->>Streamlit: Text Response + Chart Config
-    Streamlit-->>User: Display Answer + Chart
-```
-
-### Session Lifecycle
-
-```mermaid
-stateDiagram-v2
-    [*] --> Created: File Upload
-    Created --> Active: Data Stored in Redis
-    Active --> Active: Operations (extend TTL)
-    Active --> Extended: User Activity
-    Extended --> Active: Continue Work
-    Active --> Expired: 30min Inactivity
-    Active --> Deleted: Manual Delete
-    Expired --> [*]: Auto Cleanup
-    Deleted --> [*]: Immediate Cleanup
-    
-    note right of Active
-        All keys synchronized:
-        - session:tables
-        - session:metadata
-        - session:graph
-        - session:versions
-    end note
-    
-    note right of Expired
-        Redis TTL triggers:
-        - Delete all keys
-        - No orphans
-    end note
-```
 
 ### Component Interaction Map
 
@@ -308,40 +242,6 @@ flowchart TD
     style ERR_DATA fill:#F44336
 ```
 
-#### File Format Support Matrix
-
-```mermaid
-flowchart LR
-    subgraph "Structured Data"
-        CSV[CSV/TSV<br/>✓ Delimiter detection<br/>✓ Encoding detection<br/>✓ Fast parsing]
-        EXCEL[Excel<br/>✓ Multi-sheet<br/>✓ .xlsx, .xls, .xlsm<br/>✓ Formula evaluation]
-    end
-    
-    subgraph "Semi-Structured Data"
-        PDF[PDF<br/>✓ Docling extraction<br/>✓ Layout preservation<br/>✓ Multi-page]
-        IMG[Images<br/>✓ OCR processing<br/>✓ PNG, JPEG, TIFF<br/>✓ Table detection]
-    end
-    
-    subgraph "Processing"
-        CSV --> PARSER[Smart Parser]
-        EXCEL --> PARSER
-        PDF --> OCR[OCR Engine]
-        IMG --> OCR
-        PARSER --> DF[DataFrames]
-        OCR --> DF
-    end
-    
-    subgraph "Storage"
-        DF --> SER[Serializer<br/>Pickle + Base64]
-        SER --> REDIS[(Upstash Redis<br/>TTL: 30min)]
-    end
-    
-    style CSV fill:#4CAF50
-    style EXCEL fill:#4CAF50
-    style PDF fill:#FFC107
-    style IMG fill:#FFC107
-    style REDIS fill:#FF5722
-```
 
 ### 2. Data Manipulation Tab
 - **Natural Language Queries**: Describe operations in plain English
@@ -417,41 +317,6 @@ flowchart TD
     style END fill:#4CAF50
 ```
 
-#### Chart Type Decision Tree
-
-```mermaid
-flowchart TD
-    DATA[Your Data] --> Q1{What do you want to show?}
-    
-    Q1 -->|Comparison| Q2{Number of Categories}
-    Q1 -->|Trend| Q3{Time Series?}
-    Q1 -->|Distribution| Q4{Single Variable?}
-    Q1 -->|Relationship| Q5{Two Variables?}
-    Q1 -->|Part-to-Whole| Q6{Proportions?}
-    
-    Q2 -->|"< 20"| BAR[Bar Chart<br/>✓ Clear comparison<br/>✓ Easy to read]
-    Q2 -->|"> 20"| LINE[Line Chart<br/>✓ Better for many values]
-    
-    Q3 -->|Yes| LINE2[Line Chart<br/>✓ Show trends<br/>✓ Time on X-axis]
-    Q3 -->|No| AREA[Area Chart<br/>✓ Cumulative data]
-    
-    Q4 -->|Yes| HIST[Histogram<br/>✓ Distribution shape<br/>✓ Numeric data]
-    Q4 -->|No| BOX[Box Plot<br/>✓ Multiple groups<br/>✓ Outliers visible]
-    
-    Q5 -->|Yes| SCATTER[Scatter Plot<br/>✓ Correlation<br/>✓ Both numeric]
-    Q5 -->|No| HEATMAP[Heatmap<br/>✓ Many variables<br/>✓ Correlation matrix]
-    
-    Q6 -->|"< 7 slices"| PIE[Pie Chart<br/>✓ Percentage breakdown]
-    Q6 -->|"> 7 slices"| BAR2[Bar Chart<br/>✓ Better readability]
-    
-    style DATA fill:#4CAF50
-    style Q1 fill:#FFC107
-    style BAR fill:#2196F3
-    style LINE fill:#2196F3
-    style HIST fill:#2196F3
-    style SCATTER fill:#2196F3
-```
-
 ### 4. InsightBot - Intelligent Chatbot Tab
 - **🤖 LangGraph-Powered Architecture**: State-of-the-art conversational AI with persistent memory
 - **💬 Multi-Turn Conversations**: Maintains context across the entire conversation with memory checkpointing
@@ -522,118 +387,6 @@ flowchart TD
     style END fill:#4CAF50
 ```
 
-#### LangGraph State Management
-
-```mermaid
-stateDiagram-v2
-    [*] --> RouterNode: User Query
-    
-    state RouterNode {
-        [*] --> ClassifyIntent
-        ClassifyIntent --> ExtractEntities
-        ExtractEntities --> [*]
-    }
-    
-    RouterNode --> AnalyzerNode: Intent Classified
-    
-    state AnalyzerNode {
-        [*] --> LoadTools
-        LoadTools --> FunctionCalling
-        FunctionCalling --> SelectTools
-        SelectTools --> [*]
-    }
-    
-    AnalyzerNode --> InsightNode: insight_tool selected
-    AnalyzerNode --> VizNode: chart_tool selected
-    AnalyzerNode --> ResponderNode: no tools
-    
-    state InsightNode {
-        [*] --> GenerateCode
-        GenerateCode --> ExecuteCode
-        ExecuteCode --> Summarize
-        Summarize --> StoreResult
-        StoreResult --> [*]
-    }
-    
-    InsightNode --> VizNode: visualization needed
-    InsightNode --> ResponderNode: insight only
-    
-    state VizNode {
-        [*] --> LoadData
-        LoadData --> ValidateConfig
-        ValidateConfig --> GenerateChart
-        GenerateChart --> StoreChart
-        StoreChart --> [*]
-    }
-    
-    VizNode --> ResponderNode: chart generated
-    
-    state ResponderNode {
-        [*] --> CombineResults
-        CombineResults --> FormatResponse
-        FormatResponse --> SaveMemory
-        SaveMemory --> [*]
-    }
-    
-    ResponderNode --> [*]: Response Ready
-    
-    note right of RouterNode
-        Uses GPT-4o for
-        intent classification
-    end note
-    
-    note right of InsightNode
-        Safe code execution
-        with 10s timeout
-    end note
-    
-    note right of VizNode
-        Validates columns exist
-        before chart generation
-    end note
-```
-
-#### Visualization Detection Logic
-
-```mermaid
-flowchart LR
-    QUERY[User Query] --> KEYWORDS{Check Keywords}
-    
-    KEYWORDS -->|"show, plot, chart"| EXPLICIT[Explicit Request]
-    KEYWORDS -->|"distribution"| CHECK_CAT{Categorical Indicator?}
-    KEYWORDS -->|"compare, top, rank"| COMP[Comparative → Bar]
-    KEYWORDS -->|"over time, trend"| TREND[Trend → Line]
-    KEYWORDS -->|"correlation, vs"| REL[Relationship → Scatter]
-    
-    CHECK_CAT -->|"by, per, of, across"| CAT_DIST[Categorical Distribution<br/>→ Bar Chart]
-    CHECK_CAT -->|None| NUM_DIST[Numeric Distribution<br/>→ Histogram]
-    
-    EXPLICIT --> INFER{Infer Type}
-    INFER -->|"bar, column"| BAR_OUT[Bar Chart]
-    INFER -->|"line"| LINE_OUT[Line Chart]
-    INFER -->|"scatter"| SCATTER_OUT[Scatter Plot]
-    INFER -->|"pie"| PIE_OUT[Pie Chart]
-    INFER -->|Default| DEFAULT[Bar Chart]
-    
-    COMP --> OUTPUT
-    TREND --> OUTPUT
-    REL --> OUTPUT
-    CAT_DIST --> OUTPUT
-    NUM_DIST --> OUTPUT
-    BAR_OUT --> OUTPUT
-    LINE_OUT --> OUTPUT
-    SCATTER_OUT --> OUTPUT
-    PIE_OUT --> OUTPUT
-    DEFAULT --> OUTPUT
-    
-    OUTPUT[Chart Configuration]
-    
-    style QUERY fill:#4CAF50
-    style CHECK_CAT fill:#FFC107
-    style CAT_DIST fill:#2196F3
-    style NUM_DIST fill:#FF5722
-    style OUTPUT fill:#4CAF50
-```
 
 ### 5. Session Management & Version Control
 - **Automatic TTL**: Sessions expire after 30 minutes of inactivity
@@ -657,93 +410,6 @@ gitGraph
     branch outlier-capping
     commit id: "v3b: Cap Outliers (95th %ile)" tag: "1150 rows"
     commit id: "v4: Sort by Company" tag: "1150 rows"
-```
-
-#### Version Control Operations
-
-```mermaid
-flowchart TD
-    START([Data Operation]) --> CURRENT[Get Current Version]
-    CURRENT --> EXECUTE[Execute Transformation]
-    EXECUTE --> SUCCESS{Success?}
-    
-    SUCCESS -->|Yes| SNAPSHOT[Create Version Snapshot]
-    SUCCESS -->|No| ERROR[Error Handler]
-    
-    SNAPSHOT --> GEN_ID[Generate Version ID<br/>v0, v1, v2...]
-    GEN_ID --> SAVE[Save to Redis<br/>session:version:vX]
-    SAVE --> GRAPH[Update Version Graph]
-    
-    GRAPH --> NODE[Add Node<br/>version + operation]
-    NODE --> EDGE[Add Edge<br/>parent → new]
-    EDGE --> META[Update Metadata<br/>current_version]
-    
-    META --> TTL[Sync TTLs<br/>All keys expire together]
-    TTL --> END([Version Created])
-    
-    ERROR --> ROLLBACK[Rollback]
-    ROLLBACK --> END
-    
-    BRANCH([User Clicks Version]) --> LOAD_VER[Load Version Data]
-    LOAD_VER --> OVERWRITE[Overwrite Current Session]
-    OVERWRITE --> SET_CURRENT[Set as Current Version]
-    SET_CURRENT --> BRANCH_END([Branch Created])
-    
-    style START fill:#4CAF50
-    style SNAPSHOT fill:#2196F3
-    style GRAPH fill:#FF9800
-    style BRANCH fill:#9C27B0
-    style BRANCH_END fill:#9C27B0
-```
-
-#### Session Storage Structure
-
-```mermaid
-erDiagram
-    SESSION ||--o{ VERSION : has
-    SESSION ||--|| METADATA : contains
-    SESSION ||--|| GRAPH : tracks
-    SESSION ||--o{ TABLE : stores
-    
-    SESSION {
-        string session_id PK
-        int ttl_seconds
-        timestamp created_at
-        timestamp last_accessed
-    }
-    
-    VERSION {
-        string version_id PK
-        string session_id FK
-        string parent_version
-        string operation
-        string query
-        timestamp created_at
-        blob dataframes
-    }
-    
-    METADATA {
-        string session_id FK
-        string file_name
-        string file_type
-        int table_count
-        string current_version
-    }
-    
-    GRAPH {
-        string session_id FK
-        json nodes
-        json edges
-    }
-    
-    TABLE {
-        string table_name PK
-        string session_id FK
-        int row_count
-        int column_count
-        json schema
-        blob data
-    }
 ```
 
 ### 6. MCP Integration
@@ -830,42 +496,6 @@ mindmap
 
 ## 🌐 Deployment Architecture
 
-### Local Development Setup
-
-```mermaid
-flowchart LR
-    subgraph "Development Machine"
-        subgraph "Terminal 1"
-            MCP[MCP Server<br/>:8000]
-        end
-        subgraph "Terminal 2"
-            API[FastAPI<br/>:8001]
-        end
-        subgraph "Terminal 3"
-            UI[Streamlit<br/>:8501]
-        end
-    end
-    
-    subgraph "Cloud Services"
-        REDIS[(Upstash Redis<br/>Cloud Storage)]
-        OPENAI[OpenAI API<br/>GPT-4/5]
-    end
-    
-    UI <-->|HTTP| API
-    UI <-->|MCP| MCP
-    API <-->|REST| REDIS
-    MCP <-->|REST| REDIS
-    MCP <-->|API| OPENAI
-    
-    style MCP fill:#4CAF50
-    style API fill:#2196F3
-    style UI fill:#FF9800
-    style REDIS fill:#FF5722
-    style OPENAI fill:#9C27B0
-```
-
-### Current Production Deployment
-
 ```mermaid
 flowchart LR
     subgraph "User Device"
@@ -899,58 +529,6 @@ flowchart LR
     style API_PROD fill:#2196F3
     style REDIS fill:#FF5722
     style OPENAI fill:#9C27B0
-```
-
-### Alternative Deployment Options
-
-```mermaid
-flowchart TD
-    subgraph "Option 1: Single Server (On-Premise)"
-        NGINX[Nginx<br/>Reverse Proxy]
-        NGINX --> UI1[Streamlit :8501]
-        NGINX --> API1[FastAPI :8001]
-        NGINX --> MCP1[MCP Server :8000]
-    end
-    
-    subgraph "Option 2: Microservices (Cloud)"
-        LB[Load Balancer]
-        LB --> UI2[Streamlit<br/>Multiple Instances]
-        LB --> API2[FastAPI<br/>Auto-scaling]
-        LB --> MCP2[MCP Server<br/>Worker Pool]
-    end
-    
-    subgraph "Option 3: Current Setup (Full Cloud)"
-        STREAMLIT_CLOUD[Streamlit Cloud: UI<br/>✅ Live]
-        RENDER_MCP[Render: MCP Server<br/>✅ Live]
-        RENDER_API[Render: FastAPI<br/>✅ Live]
-        
-        STREAMLIT_CLOUD --> RENDER_API
-        STREAMLIT_CLOUD --> RENDER_MCP
-    end
-    
-    subgraph "Shared Infrastructure"
-        REDIS2[(Upstash Redis<br/>Serverless)]
-        OPENAI2[OpenAI API]
-        MONITORING[Monitoring<br/>Logs & Metrics]
-    end
-    
-    UI1 -.->|Data| REDIS2
-    API1 -.->|Data| REDIS2
-    MCP1 -.->|Data| REDIS2
-    
-    UI2 -.->|Data| REDIS2
-    API2 -.->|Data| REDIS2
-    MCP2 -.->|Data| REDIS2
-    
-    RENDER_API -.->|Data| REDIS2
-    RENDER_MCP -.->|Data| REDIS2
-    RENDER_MCP -.->|AI| OPENAI2
-    
-    style RENDER_MCP fill:#4CAF50
-    style RENDER_API fill:#2196F3
-    style LOCAL fill:#FF9800
-    style REDIS2 fill:#FF5722
-    style OPENAI2 fill:#9C27B0
 ```
 
 ## 🚀 Installation
@@ -1054,6 +632,11 @@ SESSION_TTL_MINUTES=30
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=gpt-4o
 
+# Langfuse Observability (Optional)
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+
 # Production Deployment URLs
 MCP_SERVER_URL=https://data-analyst-mcp-server.onrender.com/data/mcp
 FASTAPI_URL=https://data-assistant-m4kl.onrender.com
@@ -1141,6 +724,9 @@ Based on [Streamlit's official secrets management](https://docs.streamlit.io/dev
 | `SESSION_TTL_MINUTES` | Session expiration time (minutes) | 30 | 30 | No |
 | `OPENAI_API_KEY` | OpenAI API key for LLM | - | None | Yes |
 | `OPENAI_MODEL` | OpenAI model to use | gpt-4o | gpt-4o | No |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse public key | - | None | No |
+| `LANGFUSE_SECRET_KEY` | Langfuse secret key | - | None | No |
+| `LANGFUSE_BASE_URL` | Langfuse base URL | https://cloud.langfuse.com | https://cloud.langfuse.com | No |
 | `MCP_SERVER_URL` | MCP server endpoint | https://data-analyst-mcp-server.onrender.com/data/mcp | http://127.0.0.1:8000/data/mcp | No |
 | `FASTAPI_URL` | FastAPI backend URL | https://data-assistant-m4kl.onrender.com | http://127.0.0.1:8001 | No |
 | `PORT` | FastAPI server port | 8001 | 8001 | No |
@@ -1184,192 +770,6 @@ Configured in `ingestion/config.py`:
    - View conversation history and clear chat when needed
    - Charts are automatically embedded in responses when relevant
 
-### Example Queries
-
-```
-"Remove rows where price is greater than 1000"
-"Sort the data by revenue in descending order"
-"Fill missing values in the age column with the median"
-"Filter rows where status equals 'Active'"
-"Drop columns 'temp1' and 'temp2'"
-"Group by department and calculate average salary"
-"Create a new column 'full_name' by combining 'first_name' and 'last_name'"
-```
-
-### Visualization Examples
-
-**Bar Chart**: Select categorical column for X, numeric column for Y
-**Line Chart**: Perfect for time series data (date on X, value on Y)
-**Scatter Plot**: Explore correlations between two numeric variables
-**Histogram**: Distribution analysis of a single numeric column
-**Box Plot**: Outlier detection and quartile visualization
-**Pie Chart**: Proportional breakdown of categorical data
-**Heatmap**: Correlation matrix or pivot table visualization
-
-### Chatbot Examples
-
-**Statistical Queries**:
-- "What's the average salary by department?"
-- "Show me the distribution of ages"
-- "What are the top 5 products by revenue?"
-
-**Comparative Queries**:
-- "Compare sales across different regions"
-- "Which department has the highest average salary?"
-- "Show me the difference between Q1 and Q2 sales"
-
-**Exploratory Queries**:
-- "What patterns do you see in the data?"
-- "Are there any outliers in the price column?"
-- "What's the correlation between age and salary?"
-
-**Debugging Queries**:
-- "Why did the row count drop after my last change?"
-- "What operations were performed on this data?"
-- "Show me the schema of the current data"
-
-**Visualization Requests**:
-- "Show me a bar chart of sales by region"
-- "Plot the trend of revenue over time"
-- "Visualize the distribution of ages"
-
-### Command Line (MCP Client)
-
-```bash
-# Interactive mode
-python mcp_client.py
-
-# Direct query
-python mcp_client.py <session_id> "your query here"
-```
-
-## 📚 API Documentation
-
-### FastAPI Endpoints
-
-#### File Upload
-```http
-POST /api/ingestion/file-upload
-Content-Type: multipart/form-data
-
-Parameters:
-- file: File (required)
-- file_type: string (optional) - csv, excel, pdf, image
-- session_id: string (optional) - Custom session ID
-
-Response:
-{
-  "success": true,
-  "session_id": "uuid",
-  "metadata": {
-    "file_type": "csv",
-    "table_count": 1,
-    "processing_time": 0.5
-  },
-  "tables": [...]
-}
-```
-
-#### Get Session Tables
-```http
-GET /api/session/{session_id}/tables?format=summary
-
-Response:
-{
-  "session_id": "uuid",
-  "table_count": 1,
-  "tables": {
-    "current": {
-      "row_count": 100,
-      "column_count": 5,
-      "columns": [...],
-      "preview": [...]
-    }
-  }
-}
-```
-
-#### Get Session Metadata
-```http
-GET /api/session/{session_id}/metadata
-
-Response:
-{
-  "session_id": "uuid",
-  "metadata": {
-    "file_name": "data.csv",
-    "file_type": "csv",
-    "table_count": 1,
-    "created_at": 1234567890
-  }
-}
-```
-
-#### Update Session Tables
-```http
-PUT /api/session/{session_id}/tables
-
-Body:
-{
-  "tables": {
-    "table_name": {
-      "data": "base64_encoded_pickle",
-      "row_count": 100,
-      "column_count": 5,
-      "columns": [...],
-      "dtypes": {...}
-    }
-  },
-  "metadata": {...}
-}
-```
-
-#### List All Sessions
-```http
-GET /api/sessions
-
-Response:
-{
-  "success": true,
-  "count": 5,
-  "sessions": [...]
-}
-```
-
-#### Delete Session
-```http
-DELETE /api/session/{session_id}
-
-Response:
-{
-  "success": true,
-  "message": "Session deleted successfully"
-}
-```
-
-#### Extend Session TTL
-```http
-POST /api/session/{session_id}/extend
-
-Response:
-{
-  "success": true,
-  "message": "Session TTL extended"
-}
-```
-
-### Health Check
-```http
-GET /health
-
-Response:
-{
-  "status": "healthy",
-  "service": "ingestion-api",
-  "redis_connected": true,
-  "version": "1.1.0"
-}
-```
 
 ## 📁 Project Structure
 
@@ -1610,57 +1010,6 @@ Data-Assistant/
 - Conversational chatbot interface
 - Automatic visualization detection in chat
 
-## 🧪 Testing & Quality Assurance
-
-### Visualization Test Suite
-
-The platform includes a comprehensive automated test suite for evaluating visualization generation capabilities.
-
-**Test Script**: `test_visualization_evaluation.py`
-
-**Features**:
-- ✅ **Automated Testing**: Tests 10 different visualization query types
-- 📸 **Visual Proof**: Generates PNG images and interactive HTML files
-- 📊 **Beautiful Reports**: Creates HTML report with all charts embedded
-- 📈 **Pass/Fail Analysis**: Detailed results with expected vs. actual chart types
-- 🎯 **Coverage**: Bar charts, histograms, scatter plots, pie charts
-
-**Running Tests**:
-```bash
-# Run visualization tests
-python test_visualization_evaluation.py <session_id>
-
-# View results
-open viz_test_output/test_report.html
-```
-
-**Test Output Structure**:
-```
-viz_test_output/
-├── images/              # PNG images of all visualizations
-├── html/                # Interactive HTML charts
-├── test_report.html     # Main HTML report
-└── viz_test_results.json # Structured results
-```
-
-**Test Coverage**:
-1. **Bar Charts**: Compare average values across categories
-2. **Histograms**: Distribution analysis of numeric columns
-3. **Scatter Plots**: Relationship analysis between two variables
-4. **Pie Charts**: Percentage breakdown of categorical data
-
-**Success Criteria**:
-- All queries generate visualization configs
-- Parameters are correctly extracted (x_col, y_col, agg_func)
-- Charts render without errors
-- Chart types match query intent
-
-**Recent Improvements**:
-- ✅ Fixed parameter naming mismatch between tools and prompts
-- ✅ Added column validation before chart generation
-- ✅ Improved error messages showing available columns
-- ✅ Handle missing color columns gracefully after aggregation
-- ✅ Added breakdown/percentage query detection
 
 ## 🛠 Development
 

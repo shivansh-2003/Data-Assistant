@@ -25,6 +25,31 @@ The `data_visualization` module is a powerful visualization toolkit that enables
 
 All visualizations are fully interactive, theme-aware, and automatically update with data manipulation changes.
 
+## Contribution to the Main Project
+
+- Powers the Visualization Centre tab in the Streamlit UI.
+- Translates session DataFrames into Plotly figures with export support.
+- Complements InsightBot by rendering chart requests in chat responses.
+
+## Flow Diagram
+
+```mermaid
+flowchart TD
+    A[User selects chart options] --> B[Load session DataFrame]
+    B --> C{Validate columns}
+    C -->|Invalid| D[Show validation error]
+    C -->|Valid| E{Aggregation needed?}
+    E -->|Yes| F[Group and aggregate]
+    E -->|No| G[Use raw data]
+    F --> H[Build Plotly figure]
+    G --> H
+    H --> I[Apply theme + layout]
+    I --> J[Render in Streamlit]
+    J --> K{Export?}
+    K -->|PNG/SVG/HTML| L[Generate export file]
+    K -->|No| M[Done]
+```
+
 ## ✨ Features
 
 ### 1. **Basic Chart Generation**
@@ -72,67 +97,46 @@ data_visualization/
 └── README.md                   # This file
 ```
 
+## File Details
+- `__init__.py`: Exposes the main public API functions used by `app.py`.
+- `visualization.py`: Renders the Visualization Centre UI, validates user
+  selections, and generates Plotly figures from session data.
+- `smart_recommendations.py`: Builds chart recommendations using LLMs or
+  fallback heuristics when AI is unavailable.
+- `chart_compositions.py`: Implements advanced chart types like combo,
+  faceted, layered, and small-multiples charts.
+- `dashboard_builder.py`: Manages dashboard layout state, pinning, and
+  multi-chart rendering in Streamlit.
+- `utils.py`: Shared helpers for column validation, theming, and config
+  normalization.
+
 ## 📦 Installation
 
 The module requires the following dependencies (already included in main `requirements.txt`):
 
-```python
-streamlit>=1.28.0
-plotly>=5.17.0
-pandas>=2.1.3
-numpy>=1.24.0
-langchain-openai>=0.0.5
-kaleido>=0.2.1  # For static image exports
-```
+- streamlit>=1.28.0
+- plotly>=5.17.0
+- pandas>=2.1.3
+- numpy>=1.24.0
+- langchain-openai>=0.0.5
+- kaleido>=0.2.1 (for static image exports)
 
 ## 🚀 Quick Start
 
 ### Basic Usage
 
-```python
-from data_visualization import render_visualization_tab
-
-# In your Streamlit app
-render_visualization_tab()
-```
+Import `render_visualization_tab()` in `app.py` and call it inside the
+Visualization tab to render the full UI.
 
 ### Generate a Chart Programmatically
 
-```python
-from data_visualization import generate_chart
-import pandas as pd
-
-df = pd.DataFrame({
-    'category': ['A', 'B', 'C', 'D'],
-    'value': [10, 20, 15, 25]
-})
-
-fig = generate_chart(
-    df=df,
-    chart_type='bar',
-    x_col='category',
-    y_col='value',
-    agg_func='none',
-    color_col=None
-)
-
-# Display in Streamlit
-st.plotly_chart(fig)
-```
+Use `generate_chart()` to build a Plotly figure from a DataFrame by passing
+the chart type and column mappings.
 
 ### Get Smart Recommendations
 
-```python
-from data_visualization import get_chart_recommendations
-
-recommendations = get_chart_recommendations(
-    df=df,
-    user_query="Show sales trends over time"
-)
-
-for rec in recommendations:
-    print(f"Chart: {rec['chart_type']}, Relevance: {rec['relevance']}")
-```
+Use `get_chart_recommendations()` to receive ranked chart suggestions based
+on the DataFrame and an optional user query.
 
 ## 📚 API Documentation
 
@@ -142,13 +146,6 @@ for rec in recommendations:
 Main function to render the complete visualization tab in Streamlit.
 
 **Returns:** None (renders UI directly)
-
-**Usage:**
-```python
-from data_visualization import render_visualization_tab
-
-render_visualization_tab()
-```
 
 #### `generate_chart(df, chart_type, x_col, y_col, agg_func='none', color_col=None)`
 Generate a basic Plotly chart.
@@ -285,143 +282,38 @@ Get current chart configuration for pinning.
 ## 💡 Usage Examples
 
 ### Example 1: Basic Bar Chart
-
-```python
-from data_visualization import generate_chart
-import pandas as pd
-
-df = pd.DataFrame({
-    'Department': ['Sales', 'Marketing', 'Engineering'],
-    'Revenue': [100000, 80000, 120000]
-})
-
-fig = generate_chart(
-    df=df,
-    chart_type='bar',
-    x_col='Department',
-    y_col='Revenue'
-)
-```
+Generate a bar chart using `generate_chart()` by mapping a categorical
+column to X and a numeric column to Y.
 
 ### Example 2: Combo Chart (Bar + Line)
-
-```python
-from data_visualization import generate_combo_chart
-import pandas as pd
-
-df = pd.DataFrame({
-    'Month': ['Jan', 'Feb', 'Mar', 'Apr'],
-    'Sales': [1000, 1200, 1100, 1300],
-    'Profit': [200, 250, 220, 280]
-})
-
-fig = generate_combo_chart(
-    df=df,
-    x_col='Month',
-    y1_col='Sales',
-    y2_col='Profit',
-    chart1_type='bar',
-    chart2_type='line'
-)
-```
+Create a dual-axis combo chart with `generate_combo_chart()` to compare
+two metrics over the same X axis.
 
 ### Example 3: Small Multiples
-
-```python
-from data_visualization import generate_small_multiples
-import pandas as pd
-
-df = pd.DataFrame({
-    'Region': ['North', 'South', 'North', 'South', 'East', 'West'],
-    'Product': ['A', 'A', 'B', 'B', 'A', 'B'],
-    'Sales': [100, 150, 120, 180, 90, 110]
-})
-
-fig = generate_small_multiples(
-    df=df,
-    x_col='Product',
-    y_col='Sales',
-    facet_col='Region',
-    chart_type='bar'
-)
-```
+Use `generate_small_multiples()` to create a faceted grid grouped by a
+categorical column.
 
 ### Example 4: Get Recommendations
-
-```python
-from data_visualization import get_chart_recommendations
-import pandas as pd
-
-df = pd.DataFrame({
-    'Date': pd.date_range('2024-01-01', periods=30),
-    'Sales': range(100, 130),
-    'Region': ['North'] * 15 + ['South'] * 15
-})
-
-recommendations = get_chart_recommendations(
-    df=df,
-    user_query="Show sales trends by region"
-)
-
-for idx, rec in enumerate(recommendations, 1):
-    print(f"{idx}. {rec['chart_type']}: {rec['reasoning']}")
-```
+Request recommendations by passing the DataFrame and a short visualization
+goal; the module ranks chart types with reasoning.
 
 ### Example 5: Dashboard Building
-
-```python
-from data_visualization import (
-    initialize_dashboard_state,
-    pin_chart_to_dashboard,
-    get_current_chart_config
-)
-
-# Initialize dashboard
-initialize_dashboard_state()
-
-# Pin a chart
-chart_config = get_current_chart_config(
-    chart_mode='basic',
-    chart_type='bar',
-    x_col='Department',
-    y_col='Revenue',
-    agg_func='none',
-    color_col=None,
-    composition_params={}
-)
-
-pin_chart_to_dashboard(chart_config)
-```
+Initialize dashboard state, generate a chart configuration, and pin it so
+multiple charts can be managed in one layout.
 
 ## 🔗 Integration Guide
 
 ### Integration with Streamlit App
 
 The module is designed to integrate seamlessly with the main Streamlit application:
-
-```python
-# In app.py
-from data_visualization import render_visualization_tab
-
-# In your main function
-tab1, tab2, tab3 = st.tabs(["Upload", "Manipulation", "Visualization"])
-
-with tab3:
-    render_visualization_tab()
-```
+Import `render_visualization_tab()` and call it inside the Visualization tab
+section of `app.py`.
 
 ### Session Data Integration
 
 The module automatically fetches data from the session storage:
-
-```python
-from data_visualization import get_dataframe_from_session
-
-df = get_dataframe_from_session(
-    session_id="your-session-id",
-    table_name="table_name"
-)
-```
+Call `get_dataframe_from_session(session_id, table_name)` to retrieve a
+DataFrame for visualization.
 
 ### Environment Variables
 
@@ -460,41 +352,18 @@ The module uses the following environment variables:
 ### Theme Detection
 
 Charts automatically adapt to Streamlit's theme:
-
-```python
-# Automatically detects dark/light mode
-fig = generate_chart(df, 'bar', 'x', 'y')
-# Chart uses plotly_dark or plotly_white template
-```
+The module selects the appropriate Plotly template (`plotly_dark` or
+`plotly_white`) based on the current Streamlit theme.
 
 ### Aggregation Support
 
 Apply aggregations directly in chart generation:
-
-```python
-fig = generate_chart(
-    df=df,
-    chart_type='bar',
-    x_col='Department',
-    y_col='Sales',
-    agg_func='mean'  # Automatically groups and aggregates
-)
-```
+Set `agg_func` to apply grouping and aggregation during chart generation.
 
 ### Export Options
 
 All charts support multiple export formats:
-
-```python
-# PNG export
-img_bytes = fig.to_image(format="png", width=1200, height=800)
-
-# SVG export
-svg_bytes = fig.to_image(format="svg", width=1200, height=800)
-
-# HTML export
-html_str = fig.to_html(full_html=False)
-```
+Use Plotly export helpers to generate PNG, SVG, or HTML output.
 
 ## 📝 Notes
 
