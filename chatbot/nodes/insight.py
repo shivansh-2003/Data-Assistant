@@ -5,6 +5,9 @@ from typing import Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 import os
+from langfuse import observe
+
+from observability.langfuse_client import update_trace_context
 
 from ..prompts import PROMPTS
 from ..execution import generate_pandas_code, execute_pandas_code
@@ -12,6 +15,7 @@ from ..execution import generate_pandas_code, execute_pandas_code
 logger = logging.getLogger(__name__)
 
 
+@observe(name="chatbot_insight", as_type="chain")
 def insight_node(state: Dict) -> Dict:
     """
     Generate pandas code, execute it, and summarize results.
@@ -23,6 +27,7 @@ def insight_node(state: Dict) -> Dict:
     4. Store insight in state
     """
     try:
+        update_trace_context(session_id=state.get("session_id"), metadata={"node": "insight"})
         tool_calls = state.get("tool_calls", [])
         
         # Find insight tool calls

@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 from typing import List, Dict, Any, Optional
 from langchain_openai import ChatOpenAI
+from langfuse import observe
 
 
 # System message for chart recommendation agent
@@ -151,6 +152,7 @@ class ChartRecommendation:
         
         return stats
     
+    @observe(name="chart_recommendation_llm", as_type="generation")
     async def _get_recommendations_from_llm(
         self,
         stats: Dict[str, Any],

@@ -2,6 +2,9 @@
 
 import logging
 from typing import Dict, Optional
+from langfuse import observe
+
+from observability.langfuse_client import update_trace_context
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,7 @@ def validate_viz_config(chart_name: str, config: Dict) -> Optional[str]:
     return None
 
 
+@observe(name="chatbot_viz", as_type="chain")
 def viz_node(state: Dict) -> Dict:
     """
     Execute visualization tools and store chart configuration.
@@ -39,6 +43,7 @@ def viz_node(state: Dict) -> Dict:
     Note: Stores config only (not figure) since figures aren't serializable.
     """
     try:
+        update_trace_context(session_id=state.get("session_id"), metadata={"node": "viz"})
         tool_calls = state.get("tool_calls", [])
         
         # Find viz tool calls

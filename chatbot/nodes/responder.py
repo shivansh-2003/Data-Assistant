@@ -5,12 +5,16 @@ from typing import Dict
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 import os
+from langfuse import observe
+
+from observability.langfuse_client import update_trace_context
 
 from ..prompts import PROMPTS
 
 logger = logging.getLogger(__name__)
 
 
+@observe(name="chatbot_responder", as_type="chain")
 def responder_node(state: Dict) -> Dict:
     """
     Format final response combining insights and visualizations.
@@ -22,6 +26,7 @@ def responder_node(state: Dict) -> Dict:
     4. Return updated state
     """
     try:
+        update_trace_context(session_id=state.get("session_id"), metadata={"node": "responder"})
         intent = state.get("intent", "data_query")
         messages = state.get("messages", [])
         last_message = messages[-1]

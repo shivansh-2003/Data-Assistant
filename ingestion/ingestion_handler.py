@@ -3,6 +3,7 @@
 import time
 import logging
 from typing import Dict, List, Optional, Callable
+from langfuse import observe
 from .csv_handler import process_csv
 from .excel_handler import process_excel
 from .image_handler import ImageHandler
@@ -67,6 +68,7 @@ class IngestionHandler:
             }
         }
     
+    @observe(name="ingestion_process_file", as_type="span")
     def process_file(
         self,
         file_path: str,

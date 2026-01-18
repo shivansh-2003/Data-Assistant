@@ -5,6 +5,9 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from typing import Dict, List, Optional
 import os
+from langfuse import observe
+
+from observability.langfuse_client import update_trace_context
 
 try:
     from pydantic import BaseModel, Field
@@ -25,6 +28,7 @@ class IntentClassification(BaseModel):
     confidence: float = Field(default=1.0, description="Classification confidence")
 
 
+@observe(name="chatbot_router", as_type="chain")
 def router_node(state: Dict) -> Dict:
     """
     Classify user query intent and extract entities.
@@ -34,6 +38,8 @@ def router_node(state: Dict) -> Dict:
     - Responder for small talk
     """
     try:
+        update_trace_context(session_id=state.get("session_id"), metadata={"node": "router"})
+
         # Get last user message
         messages = state.get("messages", [])
         if not messages:

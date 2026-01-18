@@ -20,6 +20,7 @@ from datetime import datetime
 from data_visualization import render_visualization_tab
 from chatbot.streamlit_ui import render_chatbot_tab
 from components.data_table import render_advanced_table
+from observability.langfuse_client import update_trace_context
 
 logger = logging.getLogger(__name__)
 
@@ -434,6 +435,7 @@ def save_session_id(session_id: str):
     """Save session_id to both session state and query params."""
     st.session_state.current_session_id = session_id
     st.query_params["sid"] = session_id
+    update_trace_context(session_id=session_id, metadata={"source": "streamlit"})
 
 
 # ============================================================================

@@ -6,6 +6,7 @@ import base64
 import logging
 from typing import Dict, Optional, List, Any
 import pandas as pd
+from langfuse import observe
 
 from .constants import (
     UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN,
@@ -91,6 +92,7 @@ class RedisStore:
         except Exception as e:
             self.logger.warning(f"Failed to sync version TTLs for {session_id}: {e}")
     
+    @observe(name="redis_save_session", as_type="span")
     def save_session(
         self,
         session_id: str,
@@ -147,6 +149,7 @@ class RedisStore:
             self.logger.error(f"Failed to save session {session_id}: {e}")
             return False
     
+    @observe(name="redis_load_session", as_type="span")
     def load_session(self, session_id: str) -> Optional[Dict[str, pd.DataFrame]]:
         """
         Load DataFrames from Upstash Redis.
@@ -346,6 +349,7 @@ class RedisStore:
     # Version Management Methods
     # ============================================================================
     
+    @observe(name="redis_save_version", as_type="span")
     def save_version(
         self,
         session_id: str,
@@ -387,6 +391,7 @@ class RedisStore:
             self.logger.error(f"Failed to save version {version_id} for {session_id}: {e}")
             return False
     
+    @observe(name="redis_load_version", as_type="span")
     def load_version(
         self,
         session_id: str,

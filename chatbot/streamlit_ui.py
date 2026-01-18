@@ -8,6 +8,7 @@ import traceback
 
 from .graph import graph
 from .utils.session_loader import prepare_state_dataframes
+from observability.langfuse_client import get_langfuse_client, update_trace_context
 
 logger = logging.getLogger(__name__)
 
@@ -261,9 +262,17 @@ def handle_chat_input(session_id: str, config: dict):
                     "sources": []
                 }
                 
-                # Invoke graph
+                # Invoke graph with Langfuse trace context
                 logger.info(f"Invoking graph for query: {user_input[:50]}...")
-                result = graph.invoke(inputs, config)
+                langfuse_client = get_langfuse_client()
+                with langfuse_client.start_as_current_observation(
+                    name="chatbot_query",
+                    as_type="agent",
+                    input=user_input,
+                    metadata={"source": "streamlit_chat"},
+                ):
+                    update_trace_context(session_id=session_id, metadata={"source": "streamlit_chat"})
+                    result = graph.invoke(inputs, config)
                 
                 logger.info("Graph invoked successfully")
                 typing_placeholder.empty()

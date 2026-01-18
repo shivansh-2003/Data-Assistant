@@ -49,3 +49,6 @@ upstash-redis
 
 # Graph Visualization
 graphviz 
+
+#observability
+langfuse

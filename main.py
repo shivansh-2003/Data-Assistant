@@ -20,6 +20,7 @@ from typing import Optional, Dict, Any
 from urllib.parse import urlparse
 from pydantic import BaseModel
 import httpx
+from langfuse import observe
 
 from ingestion.ingestion_handler import IngestionHandler
 _default_handler = IngestionHandler()
@@ -192,6 +193,7 @@ def _generate_session_id(session_id: Optional[str]) -> str:
 
 
 @app.post("/api/ingestion/file-upload")
+@observe(name="api_file_upload", as_type="span")
 async def file_upload(
     file: UploadFile = File(...),
     file_type: Optional[str] = Form(None),
@@ -259,6 +261,7 @@ async def file_upload(
 
 
 @app.post("/api/ingestion/url-upload")
+@observe(name="api_url_upload", as_type="span")
 async def url_upload(request: UrlIngestionRequest):
     """Download a file from a URL and ingest it."""
     temp_file_path = None
@@ -314,6 +317,7 @@ async def url_upload(request: UrlIngestionRequest):
 
 
 @app.post("/api/ingestion/supabase-import")
+@observe(name="api_supabase_import", as_type="span")
 async def supabase_import(request: SupabaseIngestionRequest):
     """Import all tables from a Supabase project using a Postgres connection string."""
     try:

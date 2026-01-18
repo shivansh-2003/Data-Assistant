@@ -11,6 +11,9 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langchain_core.callbacks import BaseCallbackHandler
+from langfuse import observe
+
+from observability.langfuse_client import build_langchain_callback, update_trace_context
 
 
 # Configuration
@@ -200,6 +203,7 @@ def list_sessions_sync() -> List[str]:
     return [session.get("session_id") for session in sessions if "session_id" in session]
 
 
+@observe(name="mcp_analyze_data", as_type="agent")
 async def analyze_data(session_id: str, query: str) -> str:
     """
     Analyze data using natural language query.
@@ -223,8 +227,17 @@ async def analyze_data(session_id: str, query: str) -> str:
     then perform the requested operations.
     """
     
-    # Create callback to track tool usage
+    # Create callbacks to track tool usage + Langfuse tracing
     tool_callback = ToolUsageCallback()
+    update_trace_context(session_id=session_id, metadata={"source": "mcp_client"})
+    langfuse_callback = build_langchain_callback(
+        session_id=session_id,
+        metadata={"source": "mcp_client"},
+        update_trace=True,
+    )
+    callbacks = [tool_callback]
+    if langfuse_callback:
+        callbacks.append(langfuse_callback)
     
     try:
         print("\n🚀 Starting analysis...")
@@ -235,7 +248,7 @@ async def analyze_data(session_id: str, query: str) -> str:
                     {"role": "user", "content": message}
                 ]
             },
-            config={"callbacks": [tool_callback]}
+            config={"callbacks": callbacks}
         )
         
         # Show tool usage summary
@@ -315,8 +328,17 @@ async def interactive_chat():
             
             print("\n🤔 Thinking...")
             try:
-                # Create callback to track tool usage for this query
+                # Create callbacks to track tool usage + Langfuse tracing
                 tool_callback = ToolUsageCallback()
+                update_trace_context(session_id=session_id, metadata={"source": "mcp_client_interactive"})
+                langfuse_callback = build_langchain_callback(
+                    session_id=session_id,
+                    metadata={"source": "mcp_client_interactive"},
+                    update_trace=True,
+                )
+                callbacks = [tool_callback]
+                if langfuse_callback:
+                    callbacks.append(langfuse_callback)
                 
                 response = await agent.ainvoke(
                     {
@@ -325,7 +347,7 @@ async def interactive_chat():
                             {"role": "user", "content": init_message}
                         ]
                     },
-                    config={"callbacks": [tool_callback]}
+                    config={"callbacks": callbacks}
                 )
                 
                 # Show tool usage summary

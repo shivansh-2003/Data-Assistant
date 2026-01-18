@@ -5,6 +5,9 @@ from typing import Dict
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 import os
+from langfuse import observe
+
+from observability.langfuse_client import update_trace_context
 
 from ..prompts import PROMPTS
 from ..tools import get_all_tools
@@ -12,6 +15,7 @@ from ..tools import get_all_tools
 logger = logging.getLogger(__name__)
 
 
+@observe(name="chatbot_analyzer", as_type="chain")
 def analyzer_node(state: Dict) -> Dict:
     """
     Select appropriate tools based on query intent and entities.
@@ -19,6 +23,7 @@ def analyzer_node(state: Dict) -> Dict:
     Uses LLM function calling to decide which tools to invoke.
     """
     try:
+        update_trace_context(session_id=state.get("session_id"), metadata={"node": "analyzer"})
         intent = state.get("intent", "data_query")
         
         # Small talk goes directly to responder
