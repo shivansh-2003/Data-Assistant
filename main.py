@@ -44,7 +44,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Log startup
+logger.info("=" * 60)
+logger.info("Starting Data Analyst Platform - Ingestion API")
+logger.info("=" * 60)
+
 # Import MCP server from data_mcp package
+# Initialize with safe defaults
+mcp_available = False
+mcp_app = None
+
 try:
     from data_mcp.data import mcp
     
@@ -55,30 +64,43 @@ try:
     mcp_available = True
     logger.info("✅ MCP server module loaded successfully")
 except ImportError as e:
-    logger.error(f"❌ Failed to import MCP server: {e}")
-    logger.warning("MCP server functionality will be unavailable")
+    logger.warning(f"⚠️ Failed to import MCP server: {e}")
+    logger.info("MCP server functionality will be unavailable - continuing without it")
     mcp_available = False
     mcp_app = None
 except Exception as e:
-    logger.error(f"❌ Error initializing MCP server: {e}", exc_info=True)
-    logger.warning("MCP server functionality will be unavailable")
+    logger.warning(f"⚠️ Error initializing MCP server: {e}")
+    logger.info("MCP server functionality will be unavailable - continuing without it")
     mcp_available = False
     mcp_app = None
 
 # Initialize FastAPI app with MCP lifespan (if available)
-if mcp_available and mcp_app:
+# This must succeed for the app to be importable by uvicorn
+try:
+    if mcp_available and mcp_app:
+        app = FastAPI(
+            title="Data Analyst Platform - Ingestion API",
+            description="API for ingesting files and managing session data in Redis with MCP server integration",
+            version="1.1.0",
+            lifespan=mcp_app.lifespan
+        )
+        logger.info("FastAPI app created with MCP lifespan")
+    else:
+        app = FastAPI(
+            title="Data Analyst Platform - Ingestion API",
+            description="API for ingesting files and managing session data in Redis",
+            version="1.1.0"
+        )
+        logger.info("FastAPI app created without MCP lifespan")
+except Exception as e:
+    logger.error(f"Failed to create FastAPI app: {e}", exc_info=True)
+    # Create a minimal app to prevent import failure
     app = FastAPI(
-        title="Data Analyst Platform - Ingestion API",
-        description="API for ingesting files and managing session data in Redis with MCP server integration",
-        version="1.1.0",
-        lifespan=mcp_app.lifespan
-    )
-else:
-    app = FastAPI(
-        title="Data Analyst Platform - Ingestion API",
+        title="Data Analyst Platform - Ingestion API (Fallback)",
         description="API for ingesting files and managing session data in Redis",
         version="1.1.0"
     )
+    logger.warning("Using fallback FastAPI app due to initialization error")
 
 # CORS middleware
 app.add_middleware(
@@ -89,11 +111,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add startup event to log when app is ready
+@app.on_event("startup")
+async def startup_event():
+    """Log startup information when app is ready."""
+    port = int(os.getenv("PORT", 8000))
+    is_production = os.getenv("RENDER") or os.getenv("ENVIRONMENT") == "production"
+    env_type = 'Production (Render)' if is_production else 'Local Development'
+    
+    logger.info("=" * 60)
+    logger.info(f"🚀 FastAPI server started - {env_type}")
+    logger.info(f"📊 Server running on port {port}")
+    logger.info(f"🏥 Health: /health")
+    logger.info(f"📚 Docs: /docs")
+    logger.info(f"🔧 MCP Endpoint: /data/mcp (available: {mcp_available})")
+    logger.info("=" * 60)
+
 # Mount MCP server at /data endpoint (if available)
 # With path="/mcp" above, this creates endpoint at /data/mcp
 if mcp_available and mcp_app:
-    app.mount("/data", mcp_app)
-    logger.info("✅ Data MCP server mounted at /data/mcp")
+    try:
+        app.mount("/data", mcp_app)
+        logger.info("✅ Data MCP server mounted at /data/mcp")
+    except Exception as e:
+        logger.error(f"❌ Failed to mount MCP server: {e}", exc_info=True)
+        logger.warning("⚠️ Continuing without MCP server functionality")
 else:
     logger.warning("⚠️ MCP server not mounted - functionality unavailable")
 
@@ -150,11 +192,18 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    try:
+        redis_status = _default_store.is_connected()
+    except Exception as e:
+        logger.error(f"Error checking Redis connection: {e}")
+        redis_status = False
+    
     return {
         "status": "healthy",
         "service": "ingestion-api",
-        "redis_connected": _default_store.is_connected(),
-        "version": "1.1.0"
+        "redis_connected": redis_status,
+        "version": "1.1.0",
+        "mcp_available": mcp_available
     }
 
 
@@ -967,10 +1016,19 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
         logger.error(f"Error pruning versions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# MCP server already mounted above at line 75
-print("✅ Data MCP server mounted at /data/mcp")
+# Ensure app is always defined (required for uvicorn import)
+# This is a safety check to ensure the app variable exists
+if 'app' not in globals():
+    logger.error("CRITICAL: FastAPI app was not created!")
+    app = FastAPI(
+        title="Data Analyst Platform - Ingestion API (Emergency Fallback)",
+        description="API for ingesting files and managing session data in Redis",
+        version="1.1.0"
+    )
+    logger.warning("Created emergency fallback app")
 
-
+# Note: On Render, the app is started with `uvicorn main:app` which bypasses
+# the `if __name__ == "__main__"` block. The app is already configured above.
 
 if __name__ == "__main__":
     # Detect if running in production (Render)
