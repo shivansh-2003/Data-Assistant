@@ -63,58 +63,61 @@ logger.info("=" * 60)
 logger.info("Starting Data Analyst Platform - Ingestion API")
 logger.info("=" * 60)
 
-# Import MCP server from data_mcp package
+# MCP server - lazy loaded to reduce memory usage at startup
 # Initialize with safe defaults
 mcp_available = False
 mcp_app = None
 
-try:
-    from data_mcp.data import mcp
+def load_mcp_server():
+    """Lazy-load MCP server only when needed to reduce memory usage at startup."""
+    global mcp_available, mcp_app
+    if mcp_app is not None:
+        return mcp_app
     
-    # Create ASGI app from MCP server
-    # path="/mcp" creates routes at /mcp within the app
-    # When mounted at /data, final endpoint will be /data/mcp
-    mcp_app = mcp.http_app(path="/mcp")
-    mcp_available = True
-    logger.info("✅ MCP server module loaded successfully")
-except ImportError as e:
-    logger.warning(f"⚠️ Failed to import MCP server: {e}")
-    logger.info("MCP server functionality will be unavailable - continuing without it")
-    mcp_available = False
-    mcp_app = None
-except Exception as e:
-    logger.warning(f"⚠️ Error initializing MCP server: {e}")
-    logger.info("MCP server functionality will be unavailable - continuing without it")
-    mcp_available = False
-    mcp_app = None
+    try:
+        from data_mcp.data import mcp
+        
+        # Create ASGI app from MCP server
+        # path="/mcp" creates routes at /mcp within the app
+        # When mounted at /data, final endpoint will be /data/mcp
+        mcp_app = mcp.http_app(path="/mcp")
+        mcp_available = True
+        logger.info("✅ MCP server module loaded successfully (lazy-loaded)")
+        return mcp_app
+    except ImportError as e:
+        logger.warning(f"⚠️ Failed to import MCP server: {e}")
+        logger.info("MCP server functionality will be unavailable - continuing without it")
+        mcp_available = False
+        mcp_app = None
+        return None
+    except Exception as e:
+        logger.warning(f"⚠️ Error initializing MCP server: {e}")
+        logger.info("MCP server functionality will be unavailable - continuing without it")
+        mcp_available = False
+        mcp_app = None
+        return None
 
-# Initialize FastAPI app with MCP lifespan (if available)
-# This must succeed for the app to be importable by uvicorn
+# Try to load MCP server, but don't fail if it doesn't work
+# This allows the app to start even if MCP dependencies are heavy
 try:
-    if mcp_available and mcp_app:
-        app = FastAPI(
-            title="Data Analyst Platform - Ingestion API",
-            description="API for ingesting files and managing session data in Redis with MCP server integration",
-            version="1.1.0",
-            lifespan=mcp_app.lifespan
-        )
-        logger.info("FastAPI app created with MCP lifespan")
+    # Only attempt to load if explicitly enabled via environment variable
+    # This prevents memory issues on Render
+    if os.getenv("ENABLE_MCP", "true").lower() == "true":
+        load_mcp_server()
     else:
-        app = FastAPI(
-            title="Data Analyst Platform - Ingestion API",
-            description="API for ingesting files and managing session data in Redis",
-            version="1.1.0"
-        )
-        logger.info("FastAPI app created without MCP lifespan")
+        logger.info("MCP server disabled via ENABLE_MCP environment variable")
 except Exception as e:
-    logger.error(f"Failed to create FastAPI app: {e}", exc_info=True)
-    # Create a minimal app to prevent import failure
-    app = FastAPI(
-        title="Data Analyst Platform - Ingestion API (Fallback)",
-        description="API for ingesting files and managing session data in Redis",
-        version="1.1.0"
-    )
-    logger.warning("Using fallback FastAPI app due to initialization error")
+    logger.warning(f"Failed to load MCP server during startup: {e}")
+    logger.info("App will continue without MCP - it can be loaded later if needed")
+
+# Initialize FastAPI app - always create without MCP lifespan first
+# MCP can be mounted later if needed (lazy loading)
+app = FastAPI(
+    title="Data Analyst Platform - Ingestion API",
+    description="API for ingesting files and managing session data in Redis",
+    version="1.1.0"
+)
+logger.info("FastAPI app created (MCP will be mounted lazily if available)")
 
 # CORS middleware
 app.add_middleware(
@@ -141,7 +144,7 @@ async def startup_event():
     logger.info(f"🔧 MCP Endpoint: /data/mcp (available: {mcp_available})")
     logger.info("=" * 60)
 
-# Mount MCP server at /data endpoint (if available)
+# Mount MCP server at /data endpoint (if available) - lazy mount
 # With path="/mcp" above, this creates endpoint at /data/mcp
 if mcp_available and mcp_app:
     try:
@@ -151,7 +154,7 @@ if mcp_available and mcp_app:
         logger.error(f"❌ Failed to mount MCP server: {e}", exc_info=True)
         logger.warning("⚠️ Continuing without MCP server functionality")
 else:
-    logger.warning("⚠️ MCP server not mounted - functionality unavailable")
+    logger.info("ℹ️ MCP server not mounted - will be available if enabled via ENABLE_MCP")
 
 # Add a test endpoint to verify MCP mount
 @app.get("/test-mcp")
