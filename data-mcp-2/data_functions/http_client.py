@@ -14,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Configuration
-INGESTION_API_URL = "https://data-assistant-m4kl.onrender.com"
+INGESTION_API_URL =  "http://0.0.0.0:8001" #"https://data-assistant-m4kl.onrender.com"
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
 
 

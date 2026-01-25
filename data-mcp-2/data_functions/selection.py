@@ -4,6 +4,7 @@ Handles column selection, row filtering, and sampling operations.
 """
 
 import logging
+import re
 from typing import List, Optional, Dict, Any
 import pandas as pd
 
@@ -150,6 +151,26 @@ def filter_rows(
         
         original_count = len(df)
         
+        def _normalize_condition(expr: str) -> Optional[str]:
+            lower_map = {}
+            for col in df.columns:
+                key = col.lower()
+                if key in lower_map:
+                    return None
+                lower_map[key] = col
+
+            def replace_tokens(text: str) -> str:
+                def repl(match: re.Match) -> str:
+                    token = match.group(0)
+                    return lower_map.get(token.lower(), token)
+                return re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\b", repl, text)
+
+            parts = re.split(r'(".*?"|\'.*?\')', expr)
+            for idx, part in enumerate(parts):
+                if idx % 2 == 0:
+                    parts[idx] = replace_tokens(part)
+            return "".join(parts)
+
         try:
             # Apply the condition
             if use_query:
@@ -158,10 +179,30 @@ def filter_rows(
                 mask = df.eval(condition, engine="python", local_dict=variables)
                 df_filtered = df[mask]
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Invalid condition '{condition}': {str(e)}"
-            }
+            normalized = _normalize_condition(condition)
+            if normalized and normalized != condition:
+                try:
+                    if use_query:
+                        df_filtered = df.query(normalized, local_dict=variables, engine="python")
+                    else:
+                        mask = df.eval(normalized, engine="python", local_dict=variables)
+                        df_filtered = df[mask]
+                except Exception:
+                    pass
+                else:
+                    condition = normalized
+            if 'df_filtered' not in locals():
+                return {
+                    "success": False,
+                    "error": (
+                        f"Invalid condition '{condition}': {str(e)}. "
+                        "Use a pandas-style boolean expression, e.g. "
+                        "'Price > 11', 'Company == \"Apple\"', "
+                        "'Company == \"Apple\" and Ram >= 8'. "
+                        "Column names are case-sensitive; available columns: "
+                        f"{', '.join(df.columns)}"
+                    )
+                }
         
         filtered_count = len(df_filtered)
         dropped_count = original_count - filtered_count

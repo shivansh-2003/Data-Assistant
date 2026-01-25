@@ -6,6 +6,8 @@ aggregation, feature engineering, and multi-table operations.
 """
 
 from typing import Optional, List, Dict, Any
+import numpy as np
+import pandas as pd
 #from mcp.server.transport_security import TransportSecuritySettings
 from fastmcp import FastMCP
 
@@ -105,6 +107,28 @@ mcp = FastMCP(
     """
 )
 
+
+def _to_serializable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _to_serializable(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_to_serializable(item) for item in value]
+    if isinstance(value, tuple):
+        return [_to_serializable(item) for item in value]
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if pd.isna(value):
+        return None
+    return value
+
 # ============================================================================
 # Core Operations
 # ============================================================================
@@ -151,7 +175,7 @@ def get_table_summary(session_id: str, table_name: str = "current") -> dict:
     """
     try:
         result = get_data_summary(session_id, table_name)
-        return result
+        return _to_serializable(result)
     except Exception as e:
         return {
             "success": False,
