@@ -17,7 +17,7 @@ from observability.langfuse_client import build_langchain_callback, update_trace
 
 
 # Configuration
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "https://data-analyst-mcp-server.onrender.com/data/mcp")
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "https://data-assistant-m4kl.onrender.com/data/mcp")
 INGESTION_API_URL = os.getenv("INGESTION_API_URL", "https://data-assistant-m4kl.onrender.com")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.1")  # Using GPT-5.1 as requested

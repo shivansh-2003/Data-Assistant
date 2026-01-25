@@ -50,7 +50,7 @@ CONFIG_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/config"
 SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 # MCP Configuration
-MCP_SERVER_URL = get_secret("api.mcp_server_url", "MCP_SERVER_URL", "https://data-analyst-mcp-server.onrender.com/data/mcp")
+MCP_SERVER_URL = get_secret("api.mcp_server_url", "MCP_SERVER_URL", "https://data-assistant-m4kl.onrender.com/data/mcp")
 OPENAI_API_KEY = get_secret("openai.api_key", "OPENAI_API_KEY")
 OPENAI_MODEL = get_secret("openai.model", "OPENAI_MODEL", "gpt-4o")  # Fallback to gpt-4o if not specified
 

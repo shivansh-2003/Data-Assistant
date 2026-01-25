@@ -5,6 +5,7 @@ Handles session state, table initialization, and data persistence via HTTP API.
 
 import logging
 import os
+import sys
 import time
 from typing import Dict, Any, Optional, List
 import pandas as pd
@@ -18,6 +19,35 @@ load_dotenv()
 # Feature Flags
 ENABLE_HTTP_SYNC = os.getenv("ENABLE_HTTP_SYNC", "true").lower() == "true"
 ENABLE_CACHE_IN_MEMORY = os.getenv("ENABLE_CACHE_IN_MEMORY", "true").lower() == "true"
+
+# Lazy function to get Redis store from main.py if running in same process
+def _get_shared_store():
+    """Get Redis store from main.py if available (lazy check at runtime)."""
+    try:
+        # First try: check if main is already in sys.modules
+        if 'main' in sys.modules:
+            main_module = sys.modules['main']
+            if hasattr(main_module, '_default_store'):
+                store = main_module._default_store
+                if store is not None:
+                    logger.debug("Using shared Redis store from main.py (via sys.modules)")
+                    return store
+    except Exception as e:
+        logger.debug(f"Could not access store via sys.modules: {e}")
+    
+    try:
+        # Second try: import main module directly
+        import main
+        if hasattr(main, '_default_store'):
+            store = main._default_store
+            if store is not None:
+                logger.info("Using shared Redis store from main.py (direct import)")
+                return store
+    except (ImportError, AttributeError) as e:
+        logger.debug(f"Could not import main module: {e}")
+    except Exception as e:
+        logger.debug(f"Unexpected error accessing shared store: {e}")
+    return None
 
 # Global session state (in-memory cache)
 # Structure: {session_id: {table_name: dataframe}}
@@ -39,8 +69,24 @@ def _get_session_state(session_id: str) -> Dict[str, pd.DataFrame]:
         Dictionary mapping table names to DataFrames
     """
     if session_id not in session_state:
-        if ENABLE_HTTP_SYNC:
-            # Try to load from HTTP API
+        # Try direct Redis access first (same process) - lazy check
+        shared_store = _get_shared_store()
+        if shared_store is not None:
+            try:
+                tables = shared_store.load_session(session_id)
+                if tables is not None and len(tables) > 0:
+                    session_state[session_id] = tables
+                    logger.info(f"Loaded session {session_id} from Redis store with {len(tables)} tables")
+                    # Extend TTL on access
+                    shared_store.extend_ttl(session_id)
+                else:
+                    session_state[session_id] = {}
+                    logger.info(f"Session {session_id} not found in Redis store or has no tables")
+            except Exception as e:
+                logger.error(f"Failed to load session {session_id} from Redis store: {e}")
+                session_state[session_id] = {}
+        elif ENABLE_HTTP_SYNC:
+            # Fall back to HTTP API (different process)
             client = get_ingestion_client()
             try:
                 tables = client.load_tables_from_api(session_id)
@@ -65,7 +111,7 @@ def _get_session_state(session_id: str) -> Dict[str, pd.DataFrame]:
 
 def _save_session_state(session_id: str, table_name: str) -> bool:
     """
-    Save session state back to HTTP API.
+    Save session state back to Redis store or HTTP API.
     
     Args:
         session_id: Unique session identifier
@@ -74,13 +120,39 @@ def _save_session_state(session_id: str, table_name: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    if not ENABLE_HTTP_SYNC:
-        logger.debug(f"HTTP sync disabled, skipping save for session {session_id}")
-        return True
-    
     if session_id not in session_state:
         logger.warning(f"Session {session_id} not found in memory")
         return False
+    
+    # Try direct Redis access first (same process) - lazy check
+    shared_store = _get_shared_store()
+    if shared_store is not None:
+        try:
+            tables_dict = session_state[session_id]
+            # Get existing metadata or create new
+            existing_metadata = shared_store.get_metadata(session_id) or {}
+            metadata = {
+                **existing_metadata,
+                "last_operation": time.time(),
+                "last_table_modified": table_name,
+                "table_count": len(tables_dict),
+                "sync_method": "direct_redis"
+            }
+            
+            success = shared_store.save_session(session_id, tables_dict, metadata)
+            if success:
+                logger.info(f"Successfully saved session {session_id} to Redis store")
+            else:
+                logger.error(f"Failed to save session {session_id} to Redis store")
+            return success
+        except Exception as e:
+            logger.error(f"Error saving session {session_id} to Redis store: {e}")
+            return False
+    
+    # Fall back to HTTP API (different process)
+    if not ENABLE_HTTP_SYNC:
+        logger.debug(f"HTTP sync disabled, skipping save for session {session_id}")
+        return True
     
     client = get_ingestion_client()
     try:

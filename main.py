@@ -16,6 +16,8 @@ import base64
 import pickle
 import json
 import pandas as pd
+import sys
+from pathlib import Path
 from typing import Optional, Dict, Any
 from urllib.parse import urlparse
 from pydantic import BaseModel
@@ -42,11 +44,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
+# Import MCP server from data_mcp package
+from data_mcp.data import mcp
+
+# Create ASGI app from MCP server
+# path="/mcp" creates routes at /mcp within the app
+# When mounted at /data, final endpoint will be /data/mcp
+mcp_app = mcp.http_app(path="/mcp")
+
+# Initialize FastAPI app with MCP lifespan
 app = FastAPI(
     title="Data Analyst Platform - Ingestion API",
     description="API for ingesting files and managing session data in Redis with MCP server integration",
-    version="1.1.0"
+    version="1.1.0",
+    lifespan=mcp_app.lifespan
 )
 
 # CORS middleware
@@ -57,6 +68,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount MCP server at /data endpoint
+# With path="/mcp" above, this creates endpoint at /data/mcp
+app.mount("/data", mcp_app)
+logger.info("✅ Data MCP server mounted at /data/mcp")
+
+# Add a test endpoint to verify MCP mount
+@app.get("/test-mcp")
+async def test_mcp():
+    """Test endpoint to verify MCP server is accessible."""
+    return {
+        "mcp_mounted": True,
+        "endpoint": "/data/mcp",
+        "server_port": int(os.getenv("PORT", 8000)),
+        "message": "MCP server should be available at http://localhost:{}/data/mcp".format(int(os.getenv("PORT", 8000)))
+    }
 
 
 @app.get("/")
@@ -906,7 +933,11 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
         logger.error(f"Error pruning versions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# MCP server already mounted above at line 75
+print("✅ Data MCP server mounted at /data/mcp")
+
+
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8001))
+    port = int(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

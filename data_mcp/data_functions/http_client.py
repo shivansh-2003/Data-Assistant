@@ -14,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Configuration
-INGESTION_API_URL =  "http://0.0.0.0:8001" #"https://data-assistant-m4kl.onrender.com"
+INGESTION_API_URL = os.getenv("INGESTION_API_URL", f"https://data-assistant-m4kl.onrender.com")
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
 
 
@@ -87,16 +87,21 @@ class IngestionAPIClient:
             url = f"{self.base_url}/api/session/{session_id}/tables"
             params = {"format": "full"}  # Request full DataFrame data
             
-            logger.info(f"Loading tables from session {session_id} via HTTP")
+            logger.info(f"Loading tables from session {session_id} via HTTP: {url}")
             response = self.session.get(url, params=params, timeout=self.timeout)
             
             if response.status_code == 404:
-                logger.warning(f"Session {session_id} not found")
+                logger.warning(f"Session {session_id} not found at {url}")
                 return None
+            
+            if response.status_code != 200:
+                logger.error(f"Unexpected status code {response.status_code} from {url}: {response.text}")
+                response.raise_for_status()
                 
             response.raise_for_status()
             
             data = response.json()
+            logger.debug(f"Received response with {len(data.get('tables', []))} tables")
             
             # Extract base64-encoded DataFrames
             tables_dict = {}

@@ -20,14 +20,14 @@ from fastmcp import FastMCP
 # RENDER_SERVICE_NAME = os.environ.get("RENDER_SERVICE_NAME", "")
 
 # Import data functions
-from data_functions.core import (
+from .data_functions.core import (
     initialize_table,
     get_data_summary,
     list_available_tables,
     undo_last_operation,
     redo_operation as redo_last_operation
 )
-from data_functions.cleaning import (
+from .data_functions.cleaning import (
     drop_rows,
     fill_missing,
     drop_missing,
@@ -36,7 +36,7 @@ from data_functions.cleaning import (
     remove_outliers,
     detect_missing
 )
-from data_functions.selection import (
+from .data_functions.selection import (
     select_columns,
     filter_rows,
     sample_rows,
@@ -44,7 +44,7 @@ from data_functions.selection import (
     tail_rows,
     slice_rows
 )
-from data_functions.transformation import (
+from .data_functions.transformation import (
     rename_columns,
     reorder_columns,
     sort_data,
@@ -53,18 +53,18 @@ from data_functions.transformation import (
     pivot_table,
     melt_unpivot
 )
-from data_functions.aggregation import (
+from .data_functions.aggregation import (
     group_by_agg,
     describe_stats
 )
-from data_functions.feature_engineering import (
+from .data_functions.feature_engineering import (
     create_date_features,
     bin_numeric,
     one_hot_encode,
     scale_numeric,
     create_interaction
 )
-from data_functions.multi_table import (
+from .data_functions.multi_table import (
     merge_tables,
     concat_tables,
     merge_on_index
