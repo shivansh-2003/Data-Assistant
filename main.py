@@ -24,18 +24,32 @@ from pydantic import BaseModel
 import httpx
 from langfuse import observe
 
-from ingestion.ingestion_handler import IngestionHandler
-_default_handler = IngestionHandler()
+# Lazy-load heavy dependencies to reduce memory usage at startup
+# These will be initialized on first use, not at import time
+_default_handler = None
+_default_store = None
+
+def get_default_handler():
+    """Lazy-load IngestionHandler to avoid loading heavy dependencies at import time."""
+    global _default_handler
+    if _default_handler is None:
+        from ingestion.ingestion_handler import IngestionHandler
+        _default_handler = IngestionHandler()
+        logger.info("IngestionHandler initialized (lazy-loaded)")
+    return _default_handler
+
+def get_default_store():
+    """Lazy-load RedisStore to avoid connection attempts at import time."""
+    global _default_store
+    if _default_store is None:
+        from redis_db import RedisStore
+        _default_store = RedisStore()
+        logger.info("RedisStore initialized (lazy-loaded)")
+    return _default_store
 
 from ingestion.config import IngestionConfig
 from ingestion.supabase_handler import load_supabase_tables
-
-
-from redis_db import RedisStore
 from redis_db.constants import KEY_SESSION_GRAPH
-
-# Create default store instance
-_default_store = RedisStore()
 
 # Configure logging
 logging.basicConfig(
@@ -168,7 +182,7 @@ async def root():
     return {
         "message": "Data Analyst Platform - Ingestion API",
         "version": "1.1.0",
-        "redis_connected": _default_store.is_connected(),
+        "redis_connected": get_default_store().is_connected(),
         "endpoints": {
             "file_upload": "/api/ingestion/file-upload",
             "url_upload": "/api/ingestion/url-upload",
@@ -193,7 +207,7 @@ async def root():
 async def health_check():
     """Health check endpoint."""
     try:
-        redis_status = _default_store.is_connected()
+        redis_status = get_default_store().is_connected()
     except Exception as e:
         logger.error(f"Error checking Redis connection: {e}")
         redis_status = False
@@ -275,12 +289,12 @@ def _build_response_and_store(
         if source:
             session_metadata["source"] = source
         
-        if _default_store.save_session(session_id, tables_dict, session_metadata):
+        if get_default_store().save_session(session_id, tables_dict, session_metadata):
             response_data["redis_stored"] = True
             logger.info(f"Session {session_id} stored in Redis with {len(tables_dict)} tables")
             
-            if _default_store.save_version(session_id, "v0", tables_dict):
-                _default_store.update_graph(
+            if get_default_store().save_version(session_id, "v0", tables_dict):
+                get_default_store().update_graph(
                     session_id,
                     parent_vid=None,
                     new_vid="v0",
@@ -346,7 +360,7 @@ async def file_upload(
         logger.info(f"Processing file: {file.filename} ({file_size} bytes)")
         
         # Process file using ingestion handler
-        result = _default_handler.process_file(temp_file_path, file_type, file.content_type)
+        result = get_default_handler().process_file(temp_file_path, file_type, file.content_type)
         
         response_data = _build_response_and_store(
             session_id=session_id,
@@ -404,7 +418,7 @@ async def url_upload(request: UrlIngestionRequest):
             f.write(content)
         
         mime_type = response.headers.get("content-type")
-        result = _default_handler.process_file(temp_file_path, request.file_type, mime_type)
+        result = get_default_handler().process_file(temp_file_path, request.file_type, mime_type)
         response_data = _build_response_and_store(
             session_id=session_id,
             result=result,
@@ -470,7 +484,7 @@ async def supabase_import(request: SupabaseIngestionRequest):
 async def get_all_sessions():
     """List all active sessions in Redis."""
     try:
-        sessions = _default_store.list_sessions()
+        sessions = get_default_store().list_sessions()
         return JSONResponse(content={
             "success": True,
             "count": len(sessions),
@@ -494,13 +508,13 @@ async def get_session_tables(
         format: "summary" (default) for table metadata, "full" for serialized DataFrames
     """
     try:
-        tables = _default_store.load_session(session_id)
+        tables = get_default_store().load_session(session_id)
         
         if tables is None:
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
         # Extend TTL on access
-        _default_store.extend_ttl(session_id)
+        get_default_store().extend_ttl(session_id)
         
         if format == "full":
             # Return full serialized DataFrames for MCP integration
@@ -555,13 +569,13 @@ async def get_session_tables(
 async def get_session_metadata(session_id: str):
     """Get session metadata."""
     try:
-        metadata = _default_store.get_metadata(session_id)
+        metadata = get_default_store().get_metadata(session_id)
         
         if metadata is None:
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
         # Extend TTL on access
-        _default_store.extend_ttl(session_id)
+        get_default_store().extend_ttl(session_id)
         
         return JSONResponse(content={
             "session_id": session_id,
@@ -603,7 +617,7 @@ async def update_session_tables(
         }
     """
     try:
-        if not _default_store.session_exists(session_id):
+        if not get_default_store().session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
         tables_data = request_data.get("tables", {})
@@ -640,15 +654,15 @@ async def update_session_tables(
                 )
         
         # Get existing metadata and merge updates
-        existing_metadata = _default_store.get_metadata(session_id) or {}
+        existing_metadata = get_default_store().get_metadata(session_id) or {}
         updated_metadata = {**existing_metadata, **metadata_updates}
         updated_metadata["last_updated"] = time.time()
         updated_metadata["updated_by"] = "mcp_server"
         
         # Save to Redis
-        if _default_store.save_session(session_id, tables_dict, updated_metadata):
+        if get_default_store().save_session(session_id, tables_dict, updated_metadata):
             # Extend TTL on successful update
-            _default_store.extend_ttl(session_id)
+            get_default_store().extend_ttl(session_id)
             
             logger.info(f"Successfully updated session {session_id} with {len(tables_dict)} tables")
             return JSONResponse(content={
@@ -674,10 +688,10 @@ async def delete_session_endpoint(session_id: str):
     Delete a session and wipe all its data from Redis.
     """
     try:
-        if not _default_store.session_exists(session_id):
+        if not get_default_store().session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
-        if _default_store.delete_session(session_id):
+        if get_default_store().delete_session(session_id):
             logger.info(f"Session {session_id} deleted from Redis")
             return JSONResponse(content={
                 "success": True,
@@ -697,10 +711,10 @@ async def delete_session_endpoint(session_id: str):
 async def extend_session_ttl(session_id: str):
     """Extend session TTL (keeps session alive longer)."""
     try:
-        if not _default_store.session_exists(session_id):
+        if not get_default_store().session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
-        if _default_store.extend_ttl(session_id):
+        if get_default_store().extend_ttl(session_id):
             return JSONResponse(content={
                 "success": True,
                 "message": f"Session '{session_id}' TTL extended"
@@ -738,13 +752,13 @@ async def get_session_versions(session_id: str):
         Graph structure with nodes and edges
     """
     try:
-        if not _default_store.session_exists(session_id):
+        if not get_default_store().session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
-        graph = _default_store.get_graph(session_id)
+        graph = get_default_store().get_graph(session_id)
         
         # Extend TTL on access
-        _default_store.extend_ttl(session_id)
+        get_default_store().extend_ttl(session_id)
         
         return JSONResponse(content={
             "success": True,
@@ -766,16 +780,16 @@ async def get_version_tables(session_id: str, version_id: str):
     Used for previewing version data.
     """
     try:
-        if not _default_store.session_exists(session_id):
+        if not get_default_store().session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
-        tables = _default_store.load_version(session_id, version_id)
+        tables = get_default_store().load_version(session_id, version_id)
         
         if tables is None:
             raise HTTPException(status_code=404, detail=f"Version '{version_id}' not found")
         
         # Extend TTL on access
-        _default_store.extend_ttl(session_id)
+        get_default_store().extend_ttl(session_id)
         
         # Return summary format
         response = {
@@ -812,7 +826,7 @@ async def create_branch(session_id: str, request_data: Dict[str, Any]):
         {"version_id": "v1"}
     """
     try:
-        if not _default_store.session_exists(session_id):
+        if not get_default_store().session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
         version_id = request_data.get("version_id")
@@ -820,20 +834,20 @@ async def create_branch(session_id: str, request_data: Dict[str, Any]):
             raise HTTPException(status_code=400, detail="version_id is required")
         
         # Load version tables
-        tables = _default_store.load_version(session_id, version_id)
+        tables = get_default_store().load_version(session_id, version_id)
         if tables is None:
             raise HTTPException(status_code=404, detail=f"Version '{version_id}' not found")
         
         # Get existing metadata
-        metadata = _default_store.get_metadata(session_id) or {}
+        metadata = get_default_store().get_metadata(session_id) or {}
         
         # Overwrite main session with version data
-        if _default_store.save_session(session_id, tables, metadata):
+        if get_default_store().save_session(session_id, tables, metadata):
             # Set current version
-            _default_store.set_current_version(session_id, version_id)
+            get_default_store().set_current_version(session_id, version_id)
             
             # Extend TTL
-            _default_store.extend_ttl(session_id)
+            get_default_store().extend_ttl(session_id)
             
             logger.info(f"Branched session {session_id} to version {version_id}")
             return JSONResponse(content={
@@ -864,7 +878,7 @@ async def save_version_endpoint(session_id: str, request_data: Dict[str, Any]):
         }
     """
     try:
-        if not _default_store.session_exists(session_id):
+        if not get_default_store().session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
         version_id = request_data.get("version_id")
@@ -875,17 +889,17 @@ async def save_version_endpoint(session_id: str, request_data: Dict[str, Any]):
             raise HTTPException(status_code=400, detail="version_id is required")
         
         # Get current session tables
-        tables = _default_store.load_session(session_id)
+        tables = get_default_store().load_session(session_id)
         if tables is None:
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' tables not found")
         
         # Get current version from metadata
-        current_vid = _default_store.get_current_version(session_id) or "v0"
+        current_vid = get_default_store().get_current_version(session_id) or "v0"
         
         # Save as new version
-        if _default_store.save_version(session_id, version_id, tables):
+        if get_default_store().save_version(session_id, version_id, tables):
             # Update graph
-            _default_store.update_graph(
+            get_default_store().update_graph(
                 session_id,
                 parent_vid=current_vid,
                 new_vid=version_id,
@@ -894,7 +908,7 @@ async def save_version_endpoint(session_id: str, request_data: Dict[str, Any]):
             )
             
             # Set as current version
-            _default_store.set_current_version(session_id, version_id)
+            get_default_store().set_current_version(session_id, version_id)
             
             logger.info(f"Saved version {version_id} for session {session_id}")
             return JSONResponse(content={
@@ -920,19 +934,19 @@ async def delete_version_endpoint(session_id: str, version_id: str):
     Used for manual pruning.
     """
     try:
-        if not _default_store.session_exists(session_id):
+        if not get_default_store().session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
         # Delete version data
-        if _default_store.delete_version(session_id, version_id):
+        if get_default_store().delete_version(session_id, version_id):
             # Remove from graph
-            graph = _default_store.get_graph(session_id)
+            graph = get_default_store().get_graph(session_id)
             graph["nodes"] = [n for n in graph["nodes"] if n["id"] != version_id]
             graph["edges"] = [e for e in graph["edges"] if e["from"] != version_id and e["to"] != version_id]
             
             # Save updated graph
             key = KEY_SESSION_GRAPH.format(sid=session_id)
-            _default_store.redis.setex(key, _default_store.session_ttl, json.dumps(graph))
+            get_default_store().redis.setex(key, get_default_store().session_ttl, json.dumps(graph))
             
             logger.info(f"Deleted version {version_id} for session {session_id}")
             return JSONResponse(content={
@@ -958,7 +972,7 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
         {"keep_last_n": 50}
     """
     try:
-        if not _default_store.session_exists(session_id):
+        if not get_default_store().session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
         keep_last_n = None
@@ -972,7 +986,7 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
             })
         
         # Get graph
-        graph = _default_store.get_graph(session_id)
+        graph = get_default_store().get_graph(session_id)
         nodes = graph.get("nodes", [])
         
         if len(nodes) <= keep_last_n:
@@ -991,7 +1005,7 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
         # Delete versions
         deleted_count = 0
         for vid in to_delete:
-            if _default_store.delete_version(session_id, vid):
+            if get_default_store().delete_version(session_id, vid):
                 deleted_count += 1
         
         # Update graph
@@ -1000,7 +1014,7 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
         
         # Save updated graph
         key = KEY_SESSION_GRAPH.format(sid=session_id)
-        _default_store.redis.setex(key, _default_store.session_ttl, json.dumps(graph))
+        get_default_store().redis.setex(key, get_default_store().session_ttl, json.dumps(graph))
         
         logger.info(f"Pruned {deleted_count} versions for session {session_id}")
         return JSONResponse(content={
