@@ -45,20 +45,40 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import MCP server from data_mcp package
-from data_mcp.data import mcp
+try:
+    from data_mcp.data import mcp
+    
+    # Create ASGI app from MCP server
+    # path="/mcp" creates routes at /mcp within the app
+    # When mounted at /data, final endpoint will be /data/mcp
+    mcp_app = mcp.http_app(path="/mcp")
+    mcp_available = True
+    logger.info("✅ MCP server module loaded successfully")
+except ImportError as e:
+    logger.error(f"❌ Failed to import MCP server: {e}")
+    logger.warning("MCP server functionality will be unavailable")
+    mcp_available = False
+    mcp_app = None
+except Exception as e:
+    logger.error(f"❌ Error initializing MCP server: {e}", exc_info=True)
+    logger.warning("MCP server functionality will be unavailable")
+    mcp_available = False
+    mcp_app = None
 
-# Create ASGI app from MCP server
-# path="/mcp" creates routes at /mcp within the app
-# When mounted at /data, final endpoint will be /data/mcp
-mcp_app = mcp.http_app(path="/mcp")
-
-# Initialize FastAPI app with MCP lifespan
-app = FastAPI(
-    title="Data Analyst Platform - Ingestion API",
-    description="API for ingesting files and managing session data in Redis with MCP server integration",
-    version="1.1.0",
-    lifespan=mcp_app.lifespan
-)
+# Initialize FastAPI app with MCP lifespan (if available)
+if mcp_available and mcp_app:
+    app = FastAPI(
+        title="Data Analyst Platform - Ingestion API",
+        description="API for ingesting files and managing session data in Redis with MCP server integration",
+        version="1.1.0",
+        lifespan=mcp_app.lifespan
+    )
+else:
+    app = FastAPI(
+        title="Data Analyst Platform - Ingestion API",
+        description="API for ingesting files and managing session data in Redis",
+        version="1.1.0"
+    )
 
 # CORS middleware
 app.add_middleware(
@@ -69,20 +89,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount MCP server at /data endpoint
+# Mount MCP server at /data endpoint (if available)
 # With path="/mcp" above, this creates endpoint at /data/mcp
-app.mount("/data", mcp_app)
-logger.info("✅ Data MCP server mounted at /data/mcp")
+if mcp_available and mcp_app:
+    app.mount("/data", mcp_app)
+    logger.info("✅ Data MCP server mounted at /data/mcp")
+else:
+    logger.warning("⚠️ MCP server not mounted - functionality unavailable")
 
 # Add a test endpoint to verify MCP mount
 @app.get("/test-mcp")
 async def test_mcp():
     """Test endpoint to verify MCP server is accessible."""
+    port = int(os.getenv("PORT", 8000))
+    # Detect if running in production (Render)
+    is_production = os.getenv("RENDER") or os.getenv("ENVIRONMENT") == "production"
+    if is_production:
+        # Use environment variable or default Render URL pattern
+        base_url = os.getenv("RENDER_EXTERNAL_URL", "https://data-assistant-m4kl.onrender.com")
+        mcp_url = f"{base_url}/data/mcp"
+    else:
+        mcp_url = f"http://localhost:{port}/data/mcp"
+    
     return {
-        "mcp_mounted": True,
+        "mcp_mounted": mcp_available,
         "endpoint": "/data/mcp",
-        "server_port": int(os.getenv("PORT", 8000)),
-        "message": "MCP server should be available at http://localhost:{}/data/mcp".format(int(os.getenv("PORT", 8000)))
+        "server_port": port,
+        "environment": "production" if is_production else "development",
+        "message": f"MCP server is {'available' if mcp_available else 'unavailable'} at {mcp_url}" if mcp_available else "MCP server module not loaded"
     }
 
 
@@ -939,5 +973,19 @@ print("✅ Data MCP server mounted at /data/mcp")
 
 
 if __name__ == "__main__":
+    # Detect if running in production (Render)
+    is_production = os.getenv("RENDER") or os.getenv("ENVIRONMENT") == "production"
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    host = "0.0.0.0"  # Always use 0.0.0.0 for deployment compatibility
+    
+    # Disable reload in production (causes issues on Render)
+    reload = not is_production
+    
+    env_type = 'Production (Render)' if is_production else 'Local Development'
+    logger.info(f"🚀 Starting FastAPI server - {env_type}")
+    logger.info(f"📊 Server: http://{host}:{port}")
+    logger.info(f"🏥 Health: http://{host}:{port}/health")
+    logger.info(f"📚 Docs: http://{host}:{port}/docs")
+    logger.info(f"🔧 MCP Endpoint: http://{host}:{port}/data/mcp")
+    
+    uvicorn.run("main:app", host=host, port=port, reload=reload, log_level="info")
