@@ -17,6 +17,7 @@ import base64
 import pickle
 import json
 import pandas as pd
+
 import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -124,32 +125,30 @@ if os.getenv("ENABLE_MCP", "true").lower() == "true":
         logger.warning(f"MCP server unavailable: {e}")
 
 # Initialize FastAPI app - MUST succeed for uvicorn to work
-# Wrap in try/except to ensure app is always created
+# Create app immediately - this is the most critical part
+app = FastAPI(
+    title="Data Analyst Platform - Ingestion API",
+    description="API for ingesting files and managing session data in Redis",
+    version="1.1.0"
+)
+
+# CORS middleware - wrap in try/except to prevent crashes
 try:
-    app = FastAPI(
-        title="Data Analyst Platform - Ingestion API",
-        description="API for ingesting files and managing session data in Redis",
-        version="1.1.0"
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 except Exception as e:
-    # Last resort: create minimal app
-    logger.error(f"Failed to create FastAPI app: {e}")
-    app = FastAPI(title="Data Analyst Platform", version="1.1.0")
-
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    logger.warning(f"Failed to add CORS middleware: {e}")
 
 # Add startup event to log when app is ready
 @app.on_event("startup")
 async def startup_event():
     """Log startup information when app is ready."""
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 10000))  # Render default is 10000
     is_production = os.getenv("RENDER") or os.getenv("ENVIRONMENT") == "production"
     env_type = 'Production (Render)' if is_production else 'Local Development'
     
@@ -180,7 +179,7 @@ async def test_mcp():
         base_url = os.getenv("RENDER_EXTERNAL_URL", "https://data-assistant-m4kl.onrender.com")
         mcp_url = f"{base_url}/data/mcp"
     else:
-        port = int(os.getenv("PORT", 8000))
+        port = int(os.getenv("PORT", 10000))
         mcp_url = f"http://localhost:{port}/data/mcp"
     
     return {
@@ -1070,6 +1069,6 @@ if 'app' not in globals() or app is None:
     app = FastAPI(title="Data Analyst Platform", version="1.1.0")
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 10000))  # Render default is 10000
     print(f"Starting server on 0.0.0.0:{port}")
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False, log_level="info")
