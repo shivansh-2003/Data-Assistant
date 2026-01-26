@@ -39,6 +39,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Early debug prints for Render deployment troubleshooting
+print("=" * 60)
+print("Python version:", sys.version)
+print("Current working dir:", os.getcwd())
+print("PORT env var:", os.getenv("PORT", "NOT SET"))
+print("RENDER env var:", os.getenv("RENDER", "NOT SET"))
+print("Starting import of modules...")
+print("=" * 60)
+
 # Lazy-load heavy dependencies to reduce memory usage at startup
 # These will be initialized on first use, not at import time
 _default_handler = None
@@ -49,10 +58,13 @@ def get_default_handler():
     global _default_handler
     if _default_handler is None:
         try:
+            print("Loading IngestionHandler (lazy)...")
             from ingestion.ingestion_handler import IngestionHandler
             _default_handler = IngestionHandler()
             logger.info("IngestionHandler initialized (lazy-loaded)")
+            print("✅ IngestionHandler loaded successfully")
         except Exception as e:
+            print(f"❌ Failed to initialize IngestionHandler: {e}")
             logger.error(f"Failed to initialize IngestionHandler: {e}", exc_info=True)
             raise
     return _default_handler
@@ -62,10 +74,13 @@ def get_default_store():
     global _default_store
     if _default_store is None:
         try:
+            print("Loading RedisStore (lazy)...")
             from redis_db import RedisStore
             _default_store = RedisStore()
             logger.info("RedisStore initialized (lazy-loaded)")
+            print("✅ RedisStore loaded successfully")
         except Exception as e:
+            print(f"❌ Failed to initialize RedisStore: {e}")
             logger.error(f"Failed to initialize RedisStore: {e}", exc_info=True)
             raise
     return _default_store
@@ -132,6 +147,7 @@ except Exception as e:
 # Initialize FastAPI app - always create without MCP lifespan first
 # MCP can be mounted later if needed (lazy loading)
 # This MUST succeed for uvicorn to work
+print("Creating FastAPI app...")
 try:
     app = FastAPI(
         title="Data Analyst Platform - Ingestion API",
@@ -139,11 +155,14 @@ try:
         version="1.1.0"
     )
     logger.info("✅ FastAPI app created successfully (MCP will be mounted lazily if available)")
+    print("✅ FastAPI app created successfully")
 except Exception as e:
+    print(f"❌ CRITICAL: Failed to create FastAPI app: {e}")
     logger.error(f"CRITICAL: Failed to create FastAPI app: {e}", exc_info=True)
     # Create minimal app as last resort
     app = FastAPI(title="Data Analyst Platform", version="1.1.0")
     logger.warning("Using minimal FastAPI app due to initialization error")
+    print("⚠️ Using minimal FastAPI app as fallback")
 
 # CORS middleware
 app.add_middleware(
@@ -1065,20 +1084,39 @@ if __name__ == "__main__":
     # Detect if running in production (Render)
     is_production = os.getenv("RENDER") or os.getenv("ENVIRONMENT") == "production"
     port = int(os.getenv("PORT", 8000))
-    host = "0.0.0.0"  # Always use 0.0.0.0 for deployment compatibility
+    host = "0.0.0.0"  # CRITICAL: Must be 0.0.0.0 for Render to detect the port
     
-    # Disable reload in production (causes issues on Render)
-    reload = not is_production
+    # NEVER enable reload on Render (causes port binding issues)
+    reload = False if is_production else False  # Always False for safety
     
     env_type = 'Production (Render)' if is_production else 'Local Development'
+    
+    # Explicit startup messages (visible in Render logs)
+    print("=" * 60)
+    print(f"🚀 Starting FastAPI server - {env_type}")
+    print(f"📊 Binding to: {host}:{port}")
+    print(f"🏥 Health: http://{host}:{port}/health")
+    print(f"📚 Docs: http://{host}:{port}/docs")
+    print(f"🔧 MCP Endpoint: http://{host}:{port}/data/mcp")
+    print("=" * 60)
+    
     logger.info(f"🚀 Starting FastAPI server - {env_type}")
-    logger.info(f"📊 Server: http://{host}:{port}")
+    logger.info(f"📊 Binding to: {host}:{port}")
     logger.info(f"🏥 Health: http://{host}:{port}/health")
     logger.info(f"📚 Docs: http://{host}:{port}/docs")
     logger.info(f"🔧 MCP Endpoint: http://{host}:{port}/data/mcp")
     
     try:
-        uvicorn.run("main:app", host=host, port=port, reload=reload, log_level="info")
+        # Explicit uvicorn.run with all parameters
+        uvicorn.run(
+            "main:app",
+            host=host,
+            port=port,
+            reload=reload,
+            log_level="info",
+            access_log=False  # Reduce log noise on Render
+        )
     except Exception as e:
+        print(f"CRITICAL ERROR: Failed to start uvicorn: {e}")
         logger.error(f"CRITICAL: Failed to start uvicorn: {e}", exc_info=True)
         sys.exit(1)
