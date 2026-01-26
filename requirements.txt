@@ -24,6 +24,9 @@ Pillow
 requests
 httpx
 
+# Environment Variables
+python-dotenv
+
 # Database (Supabase/Postgres)
 SQLAlchemy
 psycopg2-binary
@@ -36,10 +39,9 @@ fastmcp
 langchain-mcp-adapters
 langchain
 langchain-openai
-langchain-experimental  # For pandas dataframe agent
-langgraph  # For checkpointer and state management
+langgraph
 
-# OpenAI (for GPT-5.1)
+# OpenAI
 openai
 
 google-genai
@@ -50,5 +52,5 @@ upstash-redis
 # Graph Visualization
 graphviz 
 
-#observability
+# Observability
 langfuse
