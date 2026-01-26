@@ -32,21 +32,12 @@ except ImportError:
             return func
         return decorator
 
-# Configure logging FIRST before any other operations
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Early debug prints for Render deployment troubleshooting
-print("=" * 60)
-print("Python version:", sys.version)
-print("Current working dir:", os.getcwd())
-print("PORT env var:", os.getenv("PORT", "NOT SET"))
-print("RENDER env var:", os.getenv("RENDER", "NOT SET"))
-print("Starting import of modules...")
-print("=" * 60)
 
 # Lazy-load heavy dependencies to reduce memory usage at startup
 # These will be initialized on first use, not at import time
@@ -57,45 +48,23 @@ def get_default_handler():
     """Lazy-load IngestionHandler to avoid loading heavy dependencies at import time."""
     global _default_handler
     if _default_handler is None:
-        try:
-            print("Loading IngestionHandler (lazy)...")
-            from ingestion.ingestion_handler import IngestionHandler
-            _default_handler = IngestionHandler()
-            logger.info("IngestionHandler initialized (lazy-loaded)")
-            print("✅ IngestionHandler loaded successfully")
-        except Exception as e:
-            print(f"❌ Failed to initialize IngestionHandler: {e}")
-            logger.error(f"Failed to initialize IngestionHandler: {e}", exc_info=True)
-            raise
+        from ingestion.ingestion_handler import IngestionHandler
+        _default_handler = IngestionHandler()
+        logger.info("IngestionHandler initialized (lazy-loaded)")
     return _default_handler
 
 def get_default_store():
     """Lazy-load RedisStore to avoid connection attempts at import time."""
     global _default_store
     if _default_store is None:
-        try:
-            print("Loading RedisStore (lazy)...")
-            from redis_db import RedisStore
-            _default_store = RedisStore()
-            logger.info("RedisStore initialized (lazy-loaded)")
-            print("✅ RedisStore loaded successfully")
-        except Exception as e:
-            print(f"❌ Failed to initialize RedisStore: {e}")
-            logger.error(f"Failed to initialize RedisStore: {e}", exc_info=True)
-            raise
+        from redis_db import RedisStore
+        _default_store = RedisStore()
+        logger.info("RedisStore initialized (lazy-loaded)")
     return _default_store
 
-# Import lightweight config modules (these should be safe)
-try:
-    from ingestion.config import IngestionConfig
-    from ingestion.supabase_handler import load_supabase_tables
-    from redis_db.constants import KEY_SESSION_GRAPH
-except ImportError as e:
-    logger.warning(f"Some imports failed: {e} - continuing anyway")
-    # Define fallbacks if needed
-    IngestionConfig = None
-    load_supabase_tables = None
-    KEY_SESSION_GRAPH = None
+from ingestion.config import IngestionConfig
+from ingestion.supabase_handler import load_supabase_tables
+from redis_db.constants import KEY_SESSION_GRAPH
 
 # MCP server - lazy loaded to reduce memory usage at startup
 # Initialize with safe defaults
@@ -131,38 +100,19 @@ def load_mcp_server():
         mcp_app = None
         return None
 
-# Try to load MCP server, but don't fail if it doesn't work
-# This allows the app to start even if MCP dependencies are heavy
-try:
-    # Only attempt to load if explicitly enabled via environment variable
-    # This prevents memory issues on Render
-    if os.getenv("ENABLE_MCP", "true").lower() == "true":
+# Load MCP server if enabled (optional for memory-constrained deployments)
+if os.getenv("ENABLE_MCP", "true").lower() == "true":
+    try:
         load_mcp_server()
-    else:
-        logger.info("MCP server disabled via ENABLE_MCP environment variable")
-except Exception as e:
-    logger.warning(f"Failed to load MCP server during startup: {e}")
-    logger.info("App will continue without MCP - it can be loaded later if needed")
+    except Exception as e:
+        logger.warning(f"MCP server unavailable: {e}")
 
-# Initialize FastAPI app - always create without MCP lifespan first
-# MCP can be mounted later if needed (lazy loading)
-# This MUST succeed for uvicorn to work
-print("Creating FastAPI app...")
-try:
-    app = FastAPI(
-        title="Data Analyst Platform - Ingestion API",
-        description="API for ingesting files and managing session data in Redis",
-        version="1.1.0"
-    )
-    logger.info("✅ FastAPI app created successfully (MCP will be mounted lazily if available)")
-    print("✅ FastAPI app created successfully")
-except Exception as e:
-    print(f"❌ CRITICAL: Failed to create FastAPI app: {e}")
-    logger.error(f"CRITICAL: Failed to create FastAPI app: {e}", exc_info=True)
-    # Create minimal app as last resort
-    app = FastAPI(title="Data Analyst Platform", version="1.1.0")
-    logger.warning("Using minimal FastAPI app due to initialization error")
-    print("⚠️ Using minimal FastAPI app as fallback")
+# Initialize FastAPI app
+app = FastAPI(
+    title="Data Analyst Platform - Ingestion API",
+    description="API for ingesting files and managing session data in Redis",
+    version="1.1.0"
+)
 
 # CORS middleware
 app.add_middleware(
@@ -189,17 +139,10 @@ async def startup_event():
     logger.info(f"🔧 MCP Endpoint: /data/mcp (available: {mcp_available})")
     logger.info("=" * 60)
 
-# Mount MCP server at /data endpoint (if available) - lazy mount
-# With path="/mcp" above, this creates endpoint at /data/mcp
+# Mount MCP server at /data endpoint (if available)
 if mcp_available and mcp_app:
-    try:
-        app.mount("/data", mcp_app)
-        logger.info("✅ Data MCP server mounted at /data/mcp")
-    except Exception as e:
-        logger.error(f"❌ Failed to mount MCP server: {e}", exc_info=True)
-        logger.warning("⚠️ Continuing without MCP server functionality")
-else:
-    logger.info("ℹ️ MCP server not mounted - will be available if enabled via ENABLE_MCP")
+    app.mount("/data", mcp_app)
+    logger.info("MCP server mounted at /data/mcp")
 
 # Add a test endpoint to verify MCP mount
 @app.get("/ping")
@@ -1081,42 +1024,5 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    # Detect if running in production (Render)
-    is_production = os.getenv("RENDER") or os.getenv("ENVIRONMENT") == "production"
     port = int(os.getenv("PORT", 8000))
-    host = "0.0.0.0"  # CRITICAL: Must be 0.0.0.0 for Render to detect the port
-    
-    # NEVER enable reload on Render (causes port binding issues)
-    reload = False if is_production else False  # Always False for safety
-    
-    env_type = 'Production (Render)' if is_production else 'Local Development'
-    
-    # Explicit startup messages (visible in Render logs)
-    print("=" * 60)
-    print(f"🚀 Starting FastAPI server - {env_type}")
-    print(f"📊 Binding to: {host}:{port}")
-    print(f"🏥 Health: http://{host}:{port}/health")
-    print(f"📚 Docs: http://{host}:{port}/docs")
-    print(f"🔧 MCP Endpoint: http://{host}:{port}/data/mcp")
-    print("=" * 60)
-    
-    logger.info(f"🚀 Starting FastAPI server - {env_type}")
-    logger.info(f"📊 Binding to: {host}:{port}")
-    logger.info(f"🏥 Health: http://{host}:{port}/health")
-    logger.info(f"📚 Docs: http://{host}:{port}/docs")
-    logger.info(f"🔧 MCP Endpoint: http://{host}:{port}/data/mcp")
-    
-    try:
-        # Explicit uvicorn.run with all parameters
-        uvicorn.run(
-            "main:app",
-            host=host,
-            port=port,
-            reload=reload,
-            log_level="info",
-            access_log=False  # Reduce log noise on Render
-        )
-    except Exception as e:
-        print(f"CRITICAL ERROR: Failed to start uvicorn: {e}")
-        logger.error(f"CRITICAL: Failed to start uvicorn: {e}", exc_info=True)
-        sys.exit(1)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False, log_level="info")
