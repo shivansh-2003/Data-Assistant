@@ -4,6 +4,7 @@ Stores processed DataFrames in Upstash Redis with automatic TTL expiration.
 Now supports MCP server integration via HTTP API with full DataFrame serialization.
 """
 
+# Critical: Import FastAPI first to ensure app can be created even if other imports fail
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -1063,10 +1064,12 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
         raise HTTPException(status_code=500, detail=str(e))
 
 # Safety check: ensure app is always defined (required for uvicorn import)
-if 'app' not in globals():
+# This MUST be at module level for uvicorn to work
+if 'app' not in globals() or app is None:
     logger.error("CRITICAL: FastAPI app was not created!")
     app = FastAPI(title="Data Analyst Platform", version="1.1.0")
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
+    print(f"Starting server on 0.0.0.0:{port}")
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False, log_level="info")
