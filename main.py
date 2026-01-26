@@ -82,11 +82,6 @@ except ImportError as e:
     load_supabase_tables = None
     KEY_SESSION_GRAPH = None
 
-# Log startup
-logger.info("=" * 60)
-logger.info("Starting Data Analyst Platform - Ingestion API")
-logger.info("=" * 60)
-
 # MCP server - lazy loaded to reduce memory usage at startup
 # Initialize with safe defaults
 mcp_available = False
@@ -196,24 +191,20 @@ async def ping():
 @app.get("/test-mcp")
 async def test_mcp():
     """Test endpoint to verify MCP server is accessible."""
-    port = int(os.getenv("PORT", 8000))
-    # Detect if running in production (Render)
     is_production = os.getenv("RENDER") or os.getenv("ENVIRONMENT") == "production"
     if is_production:
-        # Use environment variable or default Render URL pattern
         base_url = os.getenv("RENDER_EXTERNAL_URL", "https://data-assistant-m4kl.onrender.com")
         mcp_url = f"{base_url}/data/mcp"
     else:
+        port = int(os.getenv("PORT", 8000))
         mcp_url = f"http://localhost:{port}/data/mcp"
     
     return {
         "mcp_mounted": mcp_available,
         "endpoint": "/data/mcp",
-        "server_port": port,
         "environment": "production" if is_production else "development",
         "message": f"MCP server is {'available' if mcp_available else 'unavailable'} at {mcp_url}" if mcp_available else "MCP server module not loaded"
     }
-
 
 @app.get("/")
 async def root():
@@ -1070,31 +1061,10 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
         logger.error(f"Error pruning versions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Ensure app is always defined (required for uvicorn import)
-# This is a safety check to ensure the app variable exists
-if 'app' not in globals() or app is None:
-    logger.error("CRITICAL: FastAPI app was not created!")
-    try:
-        app = FastAPI(
-            title="Data Analyst Platform - Ingestion API (Emergency Fallback)",
-            description="API for ingesting files and managing session data in Redis",
-            version="1.1.0"
-        )
-        logger.warning("Created emergency fallback app")
-    except Exception as e:
-        logger.error(f"CRITICAL: Even fallback app creation failed: {e}", exc_info=True)
-        # Last resort - create absolute minimal app
-        from fastapi import FastAPI
-        app = FastAPI()
-        logger.error("Created absolute minimal app as last resort")
-
-# Note: On Render, the app is started with `uvicorn main:app` which bypasses
-# the `if __name__ == "__main__"` block. The app is already configured above.
-
 if __name__ == "__main__":
     # Detect if running in production (Render)
     is_production = os.getenv("RENDER") or os.getenv("ENVIRONMENT") == "production"
-    port = 8000
+    port = int(os.getenv("PORT", 8000))
     host = "0.0.0.0"  # Always use 0.0.0.0 for deployment compatibility
     
     # Disable reload in production (causes issues on Render)
@@ -1106,11 +1076,6 @@ if __name__ == "__main__":
     logger.info(f"🏥 Health: http://{host}:{port}/health")
     logger.info(f"📚 Docs: http://{host}:{port}/docs")
     logger.info(f"🔧 MCP Endpoint: http://{host}:{port}/data/mcp")
-    
-    # Verify app exists before starting
-    if 'app' not in globals() or app is None:
-        logger.error("CRITICAL: App is not defined! Cannot start server.")
-        sys.exit(1)
     
     try:
         uvicorn.run("main:app", host=host, port=port, reload=reload, log_level="info")
