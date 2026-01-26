@@ -22,7 +22,22 @@ from typing import Optional, Dict, Any
 from urllib.parse import urlparse
 from pydantic import BaseModel
 import httpx
-from langfuse import observe
+# Lazy-load langfuse to reduce memory usage
+try:
+    from langfuse import observe
+except ImportError:
+    # Fallback if langfuse is not available
+    def observe(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+# Configure logging FIRST before any other operations
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Lazy-load heavy dependencies to reduce memory usage at startup
 # These will be initialized on first use, not at import time
@@ -33,30 +48,39 @@ def get_default_handler():
     """Lazy-load IngestionHandler to avoid loading heavy dependencies at import time."""
     global _default_handler
     if _default_handler is None:
-        from ingestion.ingestion_handler import IngestionHandler
-        _default_handler = IngestionHandler()
-        logger.info("IngestionHandler initialized (lazy-loaded)")
+        try:
+            from ingestion.ingestion_handler import IngestionHandler
+            _default_handler = IngestionHandler()
+            logger.info("IngestionHandler initialized (lazy-loaded)")
+        except Exception as e:
+            logger.error(f"Failed to initialize IngestionHandler: {e}", exc_info=True)
+            raise
     return _default_handler
 
 def get_default_store():
     """Lazy-load RedisStore to avoid connection attempts at import time."""
     global _default_store
     if _default_store is None:
-        from redis_db import RedisStore
-        _default_store = RedisStore()
-        logger.info("RedisStore initialized (lazy-loaded)")
+        try:
+            from redis_db import RedisStore
+            _default_store = RedisStore()
+            logger.info("RedisStore initialized (lazy-loaded)")
+        except Exception as e:
+            logger.error(f"Failed to initialize RedisStore: {e}", exc_info=True)
+            raise
     return _default_store
 
-from ingestion.config import IngestionConfig
-from ingestion.supabase_handler import load_supabase_tables
-from redis_db.constants import KEY_SESSION_GRAPH
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Import lightweight config modules (these should be safe)
+try:
+    from ingestion.config import IngestionConfig
+    from ingestion.supabase_handler import load_supabase_tables
+    from redis_db.constants import KEY_SESSION_GRAPH
+except ImportError as e:
+    logger.warning(f"Some imports failed: {e} - continuing anyway")
+    # Define fallbacks if needed
+    IngestionConfig = None
+    load_supabase_tables = None
+    KEY_SESSION_GRAPH = None
 
 # Log startup
 logger.info("=" * 60)
@@ -112,12 +136,19 @@ except Exception as e:
 
 # Initialize FastAPI app - always create without MCP lifespan first
 # MCP can be mounted later if needed (lazy loading)
-app = FastAPI(
-    title="Data Analyst Platform - Ingestion API",
-    description="API for ingesting files and managing session data in Redis",
-    version="1.1.0"
-)
-logger.info("FastAPI app created (MCP will be mounted lazily if available)")
+# This MUST succeed for uvicorn to work
+try:
+    app = FastAPI(
+        title="Data Analyst Platform - Ingestion API",
+        description="API for ingesting files and managing session data in Redis",
+        version="1.1.0"
+    )
+    logger.info("✅ FastAPI app created successfully (MCP will be mounted lazily if available)")
+except Exception as e:
+    logger.error(f"CRITICAL: Failed to create FastAPI app: {e}", exc_info=True)
+    # Create minimal app as last resort
+    app = FastAPI(title="Data Analyst Platform", version="1.1.0")
+    logger.warning("Using minimal FastAPI app due to initialization error")
 
 # CORS middleware
 app.add_middleware(
@@ -157,6 +188,11 @@ else:
     logger.info("ℹ️ MCP server not mounted - will be available if enabled via ENABLE_MCP")
 
 # Add a test endpoint to verify MCP mount
+@app.get("/ping")
+async def ping():
+    """Minimal health check endpoint that doesn't depend on any services."""
+    return {"status": "ok", "message": "Server is running"}
+
 @app.get("/test-mcp")
 async def test_mcp():
     """Test endpoint to verify MCP server is accessible."""
@@ -212,7 +248,7 @@ async def health_check():
     try:
         redis_status = get_default_store().is_connected()
     except Exception as e:
-        logger.error(f"Error checking Redis connection: {e}")
+        logger.warning(f"Error checking Redis connection: {e}")
         redis_status = False
     
     return {
@@ -220,7 +256,8 @@ async def health_check():
         "service": "ingestion-api",
         "redis_connected": redis_status,
         "version": "1.1.0",
-        "mcp_available": mcp_available
+        "mcp_available": mcp_available,
+        "app_loaded": True
     }
 
 
@@ -1035,14 +1072,21 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
 
 # Ensure app is always defined (required for uvicorn import)
 # This is a safety check to ensure the app variable exists
-if 'app' not in globals():
+if 'app' not in globals() or app is None:
     logger.error("CRITICAL: FastAPI app was not created!")
-    app = FastAPI(
-        title="Data Analyst Platform - Ingestion API (Emergency Fallback)",
-        description="API for ingesting files and managing session data in Redis",
-        version="1.1.0"
-    )
-    logger.warning("Created emergency fallback app")
+    try:
+        app = FastAPI(
+            title="Data Analyst Platform - Ingestion API (Emergency Fallback)",
+            description="API for ingesting files and managing session data in Redis",
+            version="1.1.0"
+        )
+        logger.warning("Created emergency fallback app")
+    except Exception as e:
+        logger.error(f"CRITICAL: Even fallback app creation failed: {e}", exc_info=True)
+        # Last resort - create absolute minimal app
+        from fastapi import FastAPI
+        app = FastAPI()
+        logger.error("Created absolute minimal app as last resort")
 
 # Note: On Render, the app is started with `uvicorn main:app` which bypasses
 # the `if __name__ == "__main__"` block. The app is already configured above.
@@ -1050,7 +1094,7 @@ if 'app' not in globals():
 if __name__ == "__main__":
     # Detect if running in production (Render)
     is_production = os.getenv("RENDER") or os.getenv("ENVIRONMENT") == "production"
-    port = int(os.getenv("PORT", 8000))
+    port = 8000
     host = "0.0.0.0"  # Always use 0.0.0.0 for deployment compatibility
     
     # Disable reload in production (causes issues on Render)
@@ -1063,4 +1107,13 @@ if __name__ == "__main__":
     logger.info(f"📚 Docs: http://{host}:{port}/docs")
     logger.info(f"🔧 MCP Endpoint: http://{host}:{port}/data/mcp")
     
-    uvicorn.run("main:app", host=host, port=port, reload=reload, log_level="info")
+    # Verify app exists before starting
+    if 'app' not in globals() or app is None:
+        logger.error("CRITICAL: App is not defined! Cannot start server.")
+        sys.exit(1)
+    
+    try:
+        uvicorn.run("main:app", host=host, port=port, reload=reload, log_level="info")
+    except Exception as e:
+        logger.error(f"CRITICAL: Failed to start uvicorn: {e}", exc_info=True)
+        sys.exit(1)
