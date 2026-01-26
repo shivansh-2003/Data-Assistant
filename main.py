@@ -62,9 +62,24 @@ def get_default_store():
         logger.info("RedisStore initialized (lazy-loaded)")
     return _default_store
 
-from ingestion.config import IngestionConfig
-from ingestion.supabase_handler import load_supabase_tables
-from redis_db.constants import KEY_SESSION_GRAPH
+# Import config modules (make optional to prevent import failures)
+try:
+    from ingestion.config import IngestionConfig
+except ImportError:
+    logger.warning("IngestionConfig not available")
+    IngestionConfig = None
+
+try:
+    from ingestion.supabase_handler import load_supabase_tables
+except ImportError:
+    logger.warning("load_supabase_tables not available")
+    load_supabase_tables = None
+
+try:
+    from redis_db.constants import KEY_SESSION_GRAPH
+except ImportError:
+    logger.warning("KEY_SESSION_GRAPH not available")
+    KEY_SESSION_GRAPH = None
 
 # MCP server - lazy loaded to reduce memory usage at startup
 # Initialize with safe defaults
@@ -107,12 +122,18 @@ if os.getenv("ENABLE_MCP", "true").lower() == "true":
     except Exception as e:
         logger.warning(f"MCP server unavailable: {e}")
 
-# Initialize FastAPI app
-app = FastAPI(
-    title="Data Analyst Platform - Ingestion API",
-    description="API for ingesting files and managing session data in Redis",
-    version="1.1.0"
-)
+# Initialize FastAPI app - MUST succeed for uvicorn to work
+# Wrap in try/except to ensure app is always created
+try:
+    app = FastAPI(
+        title="Data Analyst Platform - Ingestion API",
+        description="API for ingesting files and managing session data in Redis",
+        version="1.1.0"
+    )
+except Exception as e:
+    # Last resort: create minimal app
+    logger.error(f"Failed to create FastAPI app: {e}")
+    app = FastAPI(title="Data Analyst Platform", version="1.1.0")
 
 # CORS middleware
 app.add_middleware(
@@ -139,16 +160,16 @@ async def startup_event():
     logger.info(f"🔧 MCP Endpoint: /data/mcp (available: {mcp_available})")
     logger.info("=" * 60)
 
-# Mount MCP server at /data endpoint (if available)
-if mcp_available and mcp_app:
-    app.mount("/data", mcp_app)
-    logger.info("MCP server mounted at /data/mcp")
-
-# Add a test endpoint to verify MCP mount
+# Add minimal test endpoint first (before any other endpoints)
 @app.get("/ping")
 async def ping():
     """Minimal health check endpoint that doesn't depend on any services."""
     return {"status": "ok", "message": "Server is running"}
+
+# Mount MCP server at /data endpoint (if available)
+if mcp_available and mcp_app:
+    app.mount("/data", mcp_app)
+    logger.info("MCP server mounted at /data/mcp")
 
 @app.get("/test-mcp")
 async def test_mcp():
@@ -330,7 +351,7 @@ async def file_upload(
         file_content = await file.read()
         file_size = len(file_content)
         
-        if file_size > IngestionConfig.MAX_FILE_SIZE:
+        if IngestionConfig and file_size > IngestionConfig.MAX_FILE_SIZE:
             max_mb = IngestionConfig.MAX_FILE_SIZE / (1024 * 1024)
             raise HTTPException(
                 status_code=413,
@@ -344,8 +365,13 @@ async def file_upload(
         session_id = _generate_session_id(session_id)
         
         # Save temp file
-        IngestionConfig.ensure_temp_dir()
-        temp_file_path = os.path.join(IngestionConfig.TEMP_DIR, f"{session_id}_{file.filename}")
+        if IngestionConfig:
+            IngestionConfig.ensure_temp_dir()
+            temp_dir = IngestionConfig.TEMP_DIR
+        else:
+            temp_dir = "/tmp/data-assistant"
+            os.makedirs(temp_dir, exist_ok=True)
+        temp_file_path = os.path.join(temp_dir, f"{session_id}_{file.filename}")
         
         with open(temp_file_path, "wb") as f:
             f.write(file_content)
@@ -389,17 +415,23 @@ async def url_upload(request: UrlIngestionRequest):
         if parsed.scheme not in {"http", "https"}:
             raise HTTPException(status_code=400, detail="Only http/https URLs are supported")
         
-        IngestionConfig.ensure_temp_dir()
+        if IngestionConfig:
+            IngestionConfig.ensure_temp_dir()
+            temp_dir = IngestionConfig.TEMP_DIR
+        else:
+            temp_dir = "/tmp/data-assistant"
+            os.makedirs(temp_dir, exist_ok=True)
         filename = os.path.basename(parsed.path) or "downloaded_file"
-        temp_file_path = os.path.join(IngestionConfig.TEMP_DIR, f"{session_id}_{filename}")
+        temp_file_path = os.path.join(temp_dir, f"{session_id}_{filename}")
         
         async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
             response = await client.get(request.url)
             response.raise_for_status()
             content = response.content
         
-        if len(content) > IngestionConfig.MAX_FILE_SIZE:
-            max_mb = IngestionConfig.MAX_FILE_SIZE / (1024 * 1024)
+        max_size = IngestionConfig.MAX_FILE_SIZE if IngestionConfig else 100 * 1024 * 1024
+        if len(content) > max_size:
+            max_mb = max_size / (1024 * 1024)
             raise HTTPException(
                 status_code=413,
                 detail=f"File size exceeds maximum ({max_mb}MB)"
@@ -450,7 +482,7 @@ async def supabase_import(request: SupabaseIngestionRequest):
                 "file_type": "supabase",
                 "table_count": len(tables),
                 "processing_time": 0,
-                "errors": [] if len(tables) > 0 else [IngestionConfig.ERROR_NO_TABLES_FOUND],
+                "errors": [] if len(tables) > 0 else ["No tables found"],
                 "file_path": request.project_name or "supabase"
             }
         }
@@ -725,11 +757,18 @@ async def extend_session_ttl(session_id: str):
 @app.get("/api/ingestion/config")
 async def get_config():
     """Get ingestion configuration."""
-    return {
-        "max_file_size_mb": IngestionConfig.MAX_FILE_SIZE / (1024 * 1024),
-        "supported_formats": {k: list(v) for k, v in IngestionConfig.FILE_TYPES.items()},
-        "max_tables_per_file": IngestionConfig.MAX_TABLES_PER_FILE
-    }
+    if IngestionConfig:
+        return {
+            "max_file_size_mb": IngestionConfig.MAX_FILE_SIZE / (1024 * 1024),
+            "supported_formats": {k: list(v) for k, v in IngestionConfig.FILE_TYPES.items()},
+            "max_tables_per_file": IngestionConfig.MAX_TABLES_PER_FILE
+        }
+    else:
+        return {
+            "max_file_size_mb": 100,
+            "supported_formats": {"csv": [".csv"], "excel": [".xlsx", ".xls"]},
+            "max_tables_per_file": 10
+        }
 
 
 # ============================================================================
@@ -1022,6 +1061,11 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
     except Exception as e:
         logger.error(f"Error pruning versions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Safety check: ensure app is always defined (required for uvicorn import)
+if 'app' not in globals():
+    logger.error("CRITICAL: FastAPI app was not created!")
+    app = FastAPI(title="Data Analyst Platform", version="1.1.0")
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
