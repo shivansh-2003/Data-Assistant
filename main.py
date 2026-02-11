@@ -74,26 +74,30 @@ class SupabaseIngestionRequest(BaseModel):
 # FastAPI Application Initialization
 # ============================================================================
 
-# Load MCP server first if enabled (before creating FastAPI app)
-mcp_lifespan = None
-mcp_http_app = None
-if os.getenv("ENABLE_MCP", "true").lower() == "true":
-    from data_mcp.data import mcp
-    mcp_http_app = mcp.http_app(path="/mcp")
-    mcp_lifespan = mcp_http_app.lifespan
-    mcp_available = True
-    logger.info("✅ MCP server loaded successfully")
-
-# Initialize FastAPI app with MCP lifespan
-app = FastAPI(
-    title="Data Analyst Platform", 
-    version="1.1.0",
-    lifespan=mcp_lifespan  # Critical: Pass MCP lifespan to FastAPI
-)
+# CRITICAL: Create app FIRST to ensure it always exists (for Render deployment)
+app = FastAPI(title="Data Analyst Platform", version="1.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# Mount MCP server if available
-if mcp_available and mcp_http_app:
+# Add minimal health check IMMEDIATELY (before MCP loading)
+@app.get("/ping")
+async def ping():
+    return {"status": "ok", "timestamp": time.time()}
+
+@app.get("/health")
+async def health_check():
+    redis_status = get_default_store().is_connected()
+    return {"status": "healthy", "redis_connected": redis_status, "mcp_available": mcp_available}
+
+# Now try to load MCP (non-blocking, with error handling)
+mcp_http_app = None
+if os.getenv("ENABLE_MCP", "true").lower() == "true":
+    logger.info("Attempting to load MCP server...")
+    from data_mcp.data import mcp
+    mcp_http_app = mcp.http_app(path="/mcp")
+    mcp_available = True
+    logger.info("✅ MCP server loaded successfully")
+    
+    # Mount MCP server if loaded successfully
     app.mount("/data", mcp_http_app)
     logger.info("🔧 MCP server mounted at /data/mcp")
 
@@ -157,10 +161,6 @@ def _build_response_and_store(session_id: str, result: Dict[str, Any], file_name
     return response_data
 
 # Endpoints
-@app.get("/ping")
-async def ping():
-    return {"status": "ok"}
-
 @app.get("/")
 async def root():
     return {
@@ -176,11 +176,6 @@ async def root():
             "session_delete": "DELETE /api/session/{session_id}"
         }
     }
-
-@app.get("/health")
-async def health_check():
-    redis_status = get_default_store().is_connected()
-    return {"status": "healthy", "redis_connected": redis_status, "mcp_available": mcp_available}
 
 @app.get("/test-mcp")
 async def test_mcp():
