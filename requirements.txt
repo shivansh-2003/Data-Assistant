@@ -16,10 +16,6 @@ chardet
 plotly
 kaleido  # For static image exports (PNG/SVG)
 
-# Document Processing (Docling)
-docling
-Pillow
-
 # HTTP Requests
 requests
 httpx

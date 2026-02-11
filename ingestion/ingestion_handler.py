@@ -7,7 +7,6 @@ from langfuse import observe
 from .csv_handler import process_csv
 from .excel_handler import process_excel
 from .image_handler import ImageHandler
-from .pdf_handler import process_pdf
 from .config import IngestionConfig
 
 logger = logging.getLogger(__name__)
@@ -33,8 +32,7 @@ class IngestionHandler:
         self._handlers: Dict[str, Callable] = {
             "csv": process_csv,
             "excel": process_excel,
-            "image": self.image_handler.process_image,
-            "pdf": process_pdf
+            "image": self.image_handler.process_image
         }
     
     def _error_result(
@@ -80,7 +78,7 @@ class IngestionHandler:
         
         Args:
             file_path: Path to the file to process
-            file_type: Optional file type hint ("csv", "excel", "pdf", "image")
+            file_type: Optional file type hint ("csv", "excel", "image")
             mime_type: Optional MIME type for auto-detection
             
         Returns:
@@ -103,7 +101,7 @@ class IngestionHandler:
         
         try:
             # Valid file types
-            valid_types = {"csv", "excel", "pdf", "image"}
+            valid_types = {"csv", "excel", "image"}
             
             # Use provided file_type only if it's valid, otherwise auto-detect
             if file_type and file_type.lower() in valid_types:

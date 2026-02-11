@@ -21,7 +21,7 @@ A powerful, multi-modal data analysis platform that lets you upload messy real-w
 
 The Data Assistant Platform is a comprehensive data analysis solution that combines:
 
-- **Smart File Ingestion**: Automatically extracts tables from CSV, Excel, PDFs, and images
+- **Smart File Ingestion**: Automatically extracts tables from CSV, Excel, and images
 - **Natural Language Data Manipulation**: Transform data using plain English queries powered by LLM
 - **Session Management**: Persistent data storage with automatic TTL expiration
 - **MCP Integration**: Model Context Protocol server for safe, tool-based data operations
@@ -37,7 +37,7 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
   - LangGraph (Stateful conversation flow, MemorySaver checkpointing)
   - OpenAI GPT-4o/GPT-5 (Intent classification, code generation, summarization)
   - LangChain Experimental (pandas dataframe agent)
-- **Data Processing**: Pandas, Docling (PDF extraction), NumPy
+- **Data Processing**: Pandas, NumPy
 - **Visualization**: Plotly (interactive charts), Kaleido (PNG/SVG export)
 - **MCP Server**: FastMCP for tool-based data operations
 
@@ -154,12 +154,10 @@ graph LR
         F[File Upload] --> IH[Ingestion Handler]
         IH --> CSV[CSV Handler]
         IH --> XLS[Excel Handler]
-        IH --> PDF[PDF Handler<br/>Docling]
         IH --> IMG[Image Handler<br/>OCR]
         
         CSV --> DF[DataFrames]
         XLS --> DF
-        PDF --> DF
         IMG --> DF
     end
     
@@ -192,7 +190,6 @@ graph LR
 ### 1. Multi-Format File Upload
 - **CSV/TSV**: Automatic delimiter detection
 - **Excel**: Multi-sheet support (.xlsx, .xls, .xlsm)
-- **PDF**: Table extraction with layout preservation (Docling)
 - **Images**: OCR-based table extraction (PNG, JPEG, TIFF, BMP)
 
 #### File Ingestion Pipeline
@@ -205,18 +202,15 @@ flowchart TD
     
     DETECT -->|.csv, .tsv| CSV[CSV Handler]
     DETECT -->|.xlsx, .xls| EXCEL[Excel Handler]
-    DETECT -->|.pdf| PDF[PDF Handler]
     DETECT -->|.png, .jpg| IMAGE[Image Handler]
     DETECT -->|Unknown| ERR_TYPE[Error: Unsupported Type]
     
     CSV --> CSV_PARSE[Parse CSV<br/>- Detect delimiter<br/>- Detect encoding<br/>- Handle quotes]
     EXCEL --> EXCEL_PARSE[Parse Excel<br/>- Read all sheets<br/>- Preserve names<br/>- Handle formulas]
-    PDF --> PDF_PARSE[Extract Tables<br/>- Docling OCR<br/>- Layout detection<br/>- Table extraction]
     IMAGE --> IMG_PARSE[OCR Processing<br/>- Image preprocessing<br/>- Text extraction<br/>- Table detection]
     
     CSV_PARSE --> DF[DataFrames]
     EXCEL_PARSE --> DF
-    PDF_PARSE --> DF
     IMG_PARSE --> DF
     
     DF --> VALIDATE_DATA{Validate Data}
@@ -745,7 +739,7 @@ Configured in `ingestion/config.py`:
 
 1. **Upload File**:
    - Navigate to Upload tab
-   - Select file (CSV, Excel, PDF, or Image)
+   - Select file (CSV, Excel, or Image)
    - Click "Upload & Process"
    - View extracted tables and metadata
 
@@ -817,7 +811,6 @@ Data-Assistant/
 │   ├── config.py             # Ingestion configuration
 │   ├── csv_handler.py        # CSV file processor
 │   ├── excel_handler.py      # Excel file processor
-│   ├── pdf_handler.py        # PDF file processor (Docling)
 │   └── image_handler.py      # Image file processor (OCR)
 │
 ├── data_visualization/        # Visualization module
@@ -874,14 +867,12 @@ Data-Assistant/
 **Supported Formats**:
 - **CSV**: Automatic delimiter detection, encoding detection
 - **Excel**: Multi-sheet support, preserves sheet names
-- **PDF**: Uses Docling for table extraction with OCR
 - **Images**: Uses Gemini Vision API for OCR-based table extraction
 
 **Key Functions**:
 - `process_file()`: Main entry point for file processing
 - `process_csv()`: CSV-specific handler
 - `process_excel()`: Excel-specific handler
-- `process_pdf()`: PDF-specific handler
 - `process_image()`: Image-specific handler
 
 ### 3. MCP Client (`mcp_client.py`)

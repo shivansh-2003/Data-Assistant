@@ -7,12 +7,10 @@ WORKDIR /app
 # Install system dependencies
 # - graphviz: For version history graph visualization
 # - build-essential: For compiling Python packages
-# - libgomp1: For docling dependencies
 RUN apt-get update && apt-get install -y \
     graphviz \
     libgraphviz-dev \
     build-essential \
-    libgomp1 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

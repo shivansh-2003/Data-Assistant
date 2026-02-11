@@ -6,7 +6,7 @@ and returns DataFrames plus metadata for storage in Redis.
 
 ## Responsibilities
 - Validate file size and file type.
-- Parse CSV, Excel, PDF, and image inputs into DataFrames.
+- Parse CSV, Excel, and image inputs into DataFrames.
 - Normalize multi-table outputs and table naming.
 - Surface clear errors when parsing fails.
 
@@ -25,11 +25,9 @@ flowchart TD
     B --> C{Detect format}
     C -->|CSV/TSV| D[CSV handler]
     C -->|Excel| E[Excel handler]
-    C -->|PDF| F[PDF handler]
     C -->|Image| G[Image handler]
     D --> H[Build DataFrames]
     E --> H
-    F --> H
     G --> H
     H --> I[Normalize tables + metadata]
     I --> J[Return to API for Redis storage]
@@ -40,7 +38,6 @@ flowchart TD
 - `config.py`: Limits and supported file types.
 - `csv_handler.py`: CSV/TSV parsing with delimiter detection.
 - `excel_handler.py`: Excel multi-sheet processing.
-- `pdf_handler.py`: PDF table extraction via Docling.
 - `image_handler.py`: OCR-based table extraction for images.
 - `supabase_handler.py`: Optional upload/storage integration.
 
@@ -53,7 +50,6 @@ flowchart TD
   CSV or TSV input.
 - `excel_handler.py`: Reads all sheets, preserves sheet names, and returns
   a table-per-sheet structure.
-- `pdf_handler.py`: Uses Docling to extract tables while preserving layout.
 - `image_handler.py`: Runs OCR to detect and extract tabular text from
   images into DataFrames.
 - `supabase_handler.py`: Optional helper for uploading and fetching files

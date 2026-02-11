@@ -697,7 +697,7 @@ def render_upload_tab():
     render_onboarding_tip(
         "Upload in 3 steps",
         [
-            "Drag and drop a CSV, Excel, PDF, or image file.",
+            "Drag and drop a CSV, Excel, or image file.",
             "Optionally set file type and session ID.",
             "Click Upload & Process to extract tables."
         ],
@@ -709,7 +709,7 @@ def render_upload_tab():
     step1, step2, step3 = st.columns(3)
     with step1:
         st.markdown("**1. Upload**")
-        st.caption("CSV, Excel, PDF, or image files")
+        st.caption("CSV, Excel, or image files")
     with step2:
         st.markdown("**2. Process**")
         st.caption("We extract tables and metadata")
@@ -720,8 +720,8 @@ def render_upload_tab():
     # File uploader
     uploaded_file = st.file_uploader(
         "Choose a file to upload",
-        type=['csv', 'xlsx', 'xls', 'pdf', 'png', 'jpg', 'jpeg', 'tiff', 'bmp'],
-        help="Supported formats: CSV, Excel, PDF, Images"
+        type=['csv', 'xlsx', 'xls', 'png', 'jpg', 'jpeg', 'tiff', 'bmp'],
+        help="Supported formats: CSV, Excel, Images"
     )
     st.caption("Tip: For large files, prefer CSV or Excel for faster processing.")
     
@@ -792,8 +792,7 @@ def render_upload_tab():
             ### Supported File Types:
             - **CSV/TSV**: Comma or tab-separated values
             - **Excel**: .xlsx, .xls, .xlsm files (all sheets processed)
-            - **PDF**: Multi-page PDFs with tables (requires Docling)
-            - **Images**: PNG, JPEG, TIFF, BMP with tables (requires Docling)
+            - **Images**: PNG, JPEG, TIFF, BMP with tables (OCR-based extraction)
             
             ### Features:
             - Automatic file type detection
@@ -808,11 +807,11 @@ def render_upload_tab():
         url_input = st.text_input(
             "File URL (http/https)",
             placeholder="https://example.com/data.csv",
-            help="Paste a direct link to a CSV, Excel, PDF, or image file"
+            help="Paste a direct link to a CSV, Excel, or image file"
         )
         url_file_type_hint = st.selectbox(
             "File Type (Optional - Auto-detected if not specified)",
-            ["Auto-detect", "csv", "excel", "pdf", "image"],
+            ["Auto-detect", "csv", "excel", "image"],
             key="url_file_type_hint"
         )
         url_file_type = None if url_file_type_hint == "Auto-detect" else url_file_type_hint

@@ -22,13 +22,11 @@ class IngestionConfig:
     FILE_TYPES = {
         "csv": {".csv", ".tsv"},
         "excel": {".xlsx", ".xls", ".xlsm"},
-        "pdf": {".pdf"},
         "image": {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp"}
     }
     MIME_TYPES = {
         "csv": {"text/csv", "text/plain", "application/csv"},
         "excel": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel", "application/excel"},
-        "pdf": {"application/pdf"},
         "image": {"image/png", "image/jpeg", "image/tiff", "image/bmp"}
     }
     
@@ -38,12 +36,6 @@ class IngestionConfig:
     CSV_SAMPLE_SIZE = 1000
     EXCEL_ENGINE = "openpyxl"
     EXCEL_HEADER_ROW = 0
-
-    # Docling (PDF) Options
-    DOCLING_OCR_ENABLED = os.getenv("DOCLING_OCR_ENABLED", "false").lower() == "true"
-    DOCLING_TABLE_EXTRACTION_MODE = os.getenv("DOCLING_TABLE_EXTRACTION_MODE", "auto")
-    DOCLING_LAYOUT_PRESERVATION = os.getenv("DOCLING_LAYOUT_PRESERVATION", "auto")
-    DOCLING_MIN_TABLE_CONFIDENCE = float(os.getenv("DOCLING_MIN_TABLE_CONFIDENCE", "0.5"))
     
     # Error Messages
     ERROR_UNSUPPORTED_TYPE = "Unsupported file type: {file_type}"

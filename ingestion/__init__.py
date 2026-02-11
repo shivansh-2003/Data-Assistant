@@ -1,5 +1,5 @@
 """
-Ingestion module for processing various file formats (CSV, Excel, PDF, Images).
+Ingestion module for processing various file formats (CSV, Excel, Images).
 Provides unified interface for table extraction and data ingestion.
 """
 
@@ -25,7 +25,6 @@ def process_files(file_paths: List[str], file_types: Optional[List[str]] = None)
 # Export individual handlers for direct access if needed
 from .csv_handler import process_csv
 from .excel_handler import process_excel
-from .pdf_handler import process_pdf
 
 # Backward compatibility for image handler
 _default_image_handler = ImageHandler()
@@ -43,6 +42,5 @@ __all__ = [
     "IngestionConfig",
     "process_csv",
     "process_excel",
-    "process_image",
-    "process_pdf"
+    "process_image"
 ]
