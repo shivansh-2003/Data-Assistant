@@ -1,10 +1,11 @@
 """Safe pandas code execution without signals (Streamlit-compatible)."""
 
 import logging
-from typing import Dict, Any
+import re
+from typing import Dict, Any, List
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-import time
+from difflib import get_close_matches
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,9 @@ def execute_pandas_code(code: str, dfs: Dict[str, pd.DataFrame], timeout: int = 
                 return {
                     "success": True,
                     "output": result,
-                    "error": None
+                    "error": None,
+                    "error_type": None,
+                    "suggested_columns": None
                 }
                 
             except FuturesTimeoutError:
@@ -83,14 +86,46 @@ def execute_pandas_code(code: str, dfs: Dict[str, pd.DataFrame], timeout: int = 
                 return {
                     "success": False,
                     "output": None,
-                    "error": f"Execution timed out (>{timeout} seconds)"
+                    "error": f"Execution timed out (>{timeout} seconds)",
+                    "error_type": "timeout",
+                    "suggested_columns": None
                 }
             
     except Exception as e:
         logger.error(f"Error executing pandas code: {e}", exc_info=True)
+        err_msg = str(e)
+        error_type = "other"
+        suggested_columns = None
+
+        # Detect column-not-found errors and suggest similar column names
+        if isinstance(e, KeyError):
+            bad_name = str(e).strip("'\"")
+            error_type = "column_not_found"
+            all_cols = []
+            for _df in dfs.values():
+                all_cols.extend(_df.columns.tolist())
+            all_cols = list(dict.fromkeys(all_cols))
+            if bad_name and all_cols:
+                suggested_columns = get_close_matches(bad_name, all_cols, n=3, cutoff=0.5)
+        elif "not in index" in err_msg or "column" in err_msg.lower() and ("not found" in err_msg.lower() or "not in" in err_msg.lower()):
+            # Try to extract column name from error (e.g. " 'revnue' not in index")
+            match = re.search(r"['\"]([^'\"]+)['\"].*not in index|KeyError:\s*['\"]?([^'\"]+)", err_msg, re.I)
+            bad_name = (match.group(1) or match.group(2) or "").strip() if match else ""
+            error_type = "column_not_found"
+            all_cols = []
+            for _df in dfs.values():
+                all_cols.extend(_df.columns.tolist())
+            all_cols = list(dict.fromkeys(all_cols))
+            if bad_name and all_cols:
+                suggested_columns = get_close_matches(bad_name, all_cols, n=3, cutoff=0.5)
+            if not suggested_columns and all_cols:
+                suggested_columns = all_cols[:3]
+
         return {
             "success": False,
             "output": None,
-            "error": str(e)
+            "error": err_msg,
+            "error_type": error_type,
+            "suggested_columns": suggested_columns
         }
 

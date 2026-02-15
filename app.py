@@ -43,14 +43,14 @@ def get_secret(key_path, fallback_env=None, default=None):
         return default
 
 # FastAPI endpoint configuration
-FASTAPI_URL = "https://data-assistant-84sf.onrender.com"
+FASTAPI_URL = "http://0.0.0.0:8000"
 UPLOAD_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/file-upload"
 HEALTH_ENDPOINT = f"{FASTAPI_URL}/health"
 CONFIG_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/config"
 SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 # MCP Configuration
-MCP_SERVER_URL = "https://data-assistant-84sf.onrender.com/data/mcp"
+MCP_SERVER_URL = "http://0.0.0.0:8000/data/mcp"
 OPENAI_API_KEY = get_secret("openai.api_key", "OPENAI_API_KEY")
 OPENAI_MODEL = "gpt-5.1"  # Fallback to gpt-4o if not specified
 

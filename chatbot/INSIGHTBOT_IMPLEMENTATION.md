@@ -4,6 +4,8 @@
 **Version:** 2.0.0  
 **Status:** READY FOR TESTING
 
+> **Current logic & behavior:** For up-to-date architecture, state schema, node behavior, tools, execution, prompts, and UI (including response_snapshots, clarification, suggestions), see **[README.md](README.md)**. This file documents the initial implementation and checklist; the README is the single source for logical/functional implementation.
+
 ---
 
 ## 🎉 Implementation Summary

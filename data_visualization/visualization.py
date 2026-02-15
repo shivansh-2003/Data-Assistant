@@ -28,7 +28,7 @@ from .utils import create_error_figure, apply_theme
 
 # Session endpoint configuration
 # This should match the SESSION_ENDPOINT in app.py
-FASTAPI_URL = os.getenv("FASTAPI_URL", "https://data-assistant-m4kl.onrender.com")
+FASTAPI_URL = os.getenv("FASTAPI_URL", "http://0.0.0.0:8000")
 SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 

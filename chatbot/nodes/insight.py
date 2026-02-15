@@ -15,6 +15,13 @@ from ..execution import generate_pandas_code, execute_pandas_code
 logger = logging.getLogger(__name__)
 
 
+def _extract_bad_column(error_msg: str) -> str:
+    """Try to extract the column name from a KeyError-style message."""
+    import re
+    m = re.search(r"['\"]([^'\"]+)['\"]", error_msg)
+    return m.group(1) if m else "that column"
+
+
 @observe(name="chatbot_insight", as_type="chain")
 def insight_node(state: Dict) -> Dict:
     """
@@ -57,9 +64,32 @@ def insight_node(state: Dict) -> Dict:
             state["error"] = "No data available for analysis"
             return state
         
+        # Use effective_query when present (follow-up resolution from router)
+        effective_query = state.get("effective_query")
+        if effective_query:
+            query = effective_query
         # Process first insight call (can extend to handle multiple)
         insight_call = insight_calls[0]
-        insight_query = insight_call.get("args", {}).get("query", query)
+        insight_query = effective_query or insight_call.get("args", {}).get("query", query)
+
+        # Summarize previous result (no code run) when user said "summarize that"
+        if state.get("intent") == "summarize_last":
+            if state.get("last_insight") or state.get("insight_data"):
+                prev = state.get("last_insight") or ""
+                if state.get("insight_data") and state["insight_data"].get("type") == "dataframe":
+                    import pandas as pd
+                    df = pd.DataFrame(state["insight_data"]["data"])
+                    prev = df.to_string()[:1500] if not prev else prev
+                summary = summarize_insight("Summarize this result clearly in one or two sentences.", prev)
+                state["last_insight"] = summary
+                state["one_line_insight"] = summary.split(".")[0].strip() + "." if summary else summary
+                sources = state.get("sources", [])
+                sources.append("insight_tool")
+                state["sources"] = sources
+                return state
+            else:
+                state["error"] = "No previous result to summarize. Ask a question about your data first."
+                return state
         
         # Generate pandas code
         logger.info(f"Generating pandas code for: {insight_query[:50]}...")
@@ -69,12 +99,23 @@ def insight_node(state: Dict) -> Dict:
             df_names=list(df_dict.keys())
         )
         
+        # Store code in state for "Show code" in UI
+        state["generated_code"] = code
+        
         # Execute code
         logger.info("Executing pandas code...")
         execution_result = execute_pandas_code(code, df_dict)
         
         if not execution_result["success"]:
-            state["error"] = f"Analysis failed: {execution_result['error']}"
+            state["error"] = execution_result.get("error", "Analysis failed")
+            if execution_result.get("error_type") == "column_not_found" and execution_result.get("suggested_columns"):
+                state["error_suggestion"] = {
+                    "type": "did_you_mean",
+                    "suggested_columns": execution_result["suggested_columns"],
+                    "bad_column": _extract_bad_column(execution_result.get("error", ""))
+                }
+            else:
+                state["error_suggestion"] = None
             return state
         
         output = execution_result["output"]
@@ -83,8 +124,10 @@ def insight_node(state: Dict) -> Dict:
         logger.info("Summarizing results...")
         summary = summarize_insight(insight_query, output)
         
-        # Store results
+        # Store results (first sentence as one-line takeaway for UI consistency)
         state["last_insight"] = summary
+        first_sentence = summary.split(".")[0].strip() + "." if summary else summary
+        state["one_line_insight"] = first_sentence
         
         # Store output based on type for serialization
         import pandas as pd
@@ -117,6 +160,12 @@ def insight_node(state: Dict) -> Dict:
         sources = state.get("sources", [])
         sources.append("insight_tool")
         state["sources"] = sources
+        
+        # Update conversation context for follow-up resolution next turn
+        state["conversation_context"] = {
+            "last_query": insight_query,
+            "last_insight_summary": (summary or "")[:400],
+        }
         
         logger.info("Insight generated successfully")
         

@@ -31,10 +31,10 @@ def analyzer_node(state: Dict) -> Dict:
             state["tool_calls"] = []
             return state
         
-        # Get query and context
+        # Get query and context (use effective_query when follow-up was resolved)
         messages = state.get("messages", [])
         last_message = messages[-1]
-        query = last_message.content if hasattr(last_message, 'content') else str(last_message)
+        query = state.get("effective_query") or (last_message.content if hasattr(last_message, 'content') else str(last_message))
         
         schema = state.get("schema", {})
         entities = state.get("entities", {})
