@@ -23,9 +23,15 @@ CHATBOT_CSS = """
   .insightbot-session-pill { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.75rem; 
     background: var(--secondary-background-color, #f3f4f6); border-radius: 9999px; font-size: 0.8rem; color: var(--text-color, #374151); margin-top: 0.25rem; }
   .insightbot-suggestions { padding: 0.75rem; background: var(--secondary-background-color, #f8fafc); border-radius: 12px; margin: 0.75rem 0; }
+  .insightbot-suggestions button, .insightbot-quick-actions button { border-radius: 999px; padding: 6px 14px; 
+    font-weight: 500; background: var(--primary-50, #eef2ff); border: 1px solid var(--border, #e5e7eb); transition: background 0.2s; }
+  .insightbot-suggestions button:hover, .insightbot-quick-actions button:hover { background: rgba(102, 126, 234, 0.18); }
   .insightbot-quick-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
   .insightbot-code-expander { border-radius: 8px; overflow: hidden; border: 1px solid var(--border-color, #e5e7eb); }
   .insightbot-timestamp { font-size: 0.7rem; opacity: 0.7; }
+  .insightbot-key-finding { background: var(--primary-50, #eef2ff); border-left: 4px solid var(--primary-600, #667eea); padding: 0.75rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-weight: 500; }
+  .insightbot-analyzing { animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 </style>
 """
 
@@ -119,6 +125,7 @@ def render_chatbot_tab():
             if not response_snapshots and viz_config and not viz_error:
                 viz_figure = generate_chart_from_config_ui(viz_config, session_id)
 
+            st.markdown('<div class="card-elevated" role="region" aria-label="Chat messages">', unsafe_allow_html=True)
             display_message_history(
                 messages,
                 viz_figure=viz_figure,
@@ -130,17 +137,21 @@ def render_chatbot_tab():
             )
 
             if suggestions:
-                with st.container():
-                    st.markdown("**💡 Suggested follow-ups**")
-                    sug_cols = st.columns(min(3, len(suggestions)))
-                    for i, sug in enumerate(suggestions[:3]):
-                        with sug_cols[i]:
-                            label = (sug[:48] + "…") if len(sug) > 48 else sug
-                            if st.button(label, key=f"sug_{i}", use_container_width=True):
-                                st.session_state["pending_chat_query"] = sug
-                                st.rerun()
+                st.markdown('<div class="insightbot-suggestions">', unsafe_allow_html=True)
+                st.markdown("**💡 Suggested follow-ups**")
+                sug_cols = st.columns(min(3, len(suggestions)))
+                for i, sug in enumerate(suggestions[:3]):
+                    with sug_cols[i]:
+                        label = (sug[:48] + "…") if len(sug) > 48 else sug
+                        if st.button(label, key=f"sug_{i}", use_container_width=True):
+                            st.session_state["pending_chat_query"] = sug
+                            st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
+        st.markdown('<div class="card-elevated" role="region" aria-label="Chat input">', unsafe_allow_html=True)
         handle_chat_input(session_id, config, graph)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     except Exception as e:
         logger.error(f"Error in chatbot tab: {e}", exc_info=True)

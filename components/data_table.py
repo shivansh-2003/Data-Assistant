@@ -36,7 +36,7 @@ def render_advanced_table(
 
     st.markdown("**Data Explorer**")
     
-    # Search functionality
+    # Search
     search_query = st.text_input(
         "Search across all columns",
         placeholder="Type to filter rows...",
@@ -111,8 +111,8 @@ def render_advanced_table(
 
     st.divider()
 
-    # Controls row
-    col1, col2, col3 = st.columns([2, 1, 1])
+    # Toolbar: Sort, Direction, Rows per page, Export
+    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
     with col1:
         sort_col = st.selectbox(
             "Sort by",
@@ -134,17 +134,24 @@ def render_advanced_table(
         page_size_options = [10]
 
     with col3:
-        # Find the index for default page size
         try:
             default_index = page_size_options.index(page_size_default)
         except ValueError:
             default_index = min(len(page_size_options) - 1, 0)
-        
         page_size = st.selectbox(
             "Rows per page",
             options=page_size_options,
             index=default_index,
             key=f"{key_prefix}_page_size"
+        )
+    with col4:
+        csv_export = filtered_df.to_csv(index=False)
+        st.download_button(
+            "Export CSV",
+            data=csv_export,
+            file_name="data_export.csv",
+            mime="text/csv",
+            key=f"{key_prefix}_export_csv",
         )
 
     # Apply sorting

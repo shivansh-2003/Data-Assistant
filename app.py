@@ -20,6 +20,7 @@ from datetime import datetime
 from data_visualization import render_visualization_tab
 from chatbot.streamlit_ui import render_chatbot_tab
 from components.data_table import render_advanced_table
+from components.empty_state import render_empty_state
 from observability.langfuse_client import update_trace_context
 
 logger = logging.getLogger(__name__)
@@ -122,14 +123,23 @@ def inject_keyboard_shortcuts():
         unsafe_allow_html=True
     )
 
+# Google Fonts for typography
+st.markdown(
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">',
+    unsafe_allow_html=True
+)
+
 # Custom CSS for better styling
 st.markdown("""
     <style>
     :root {
-        --primary: #1f77b4;
-        --primary-600: #18639b;
-        --primary-50: #e9f2fb;
-        --accent: #ff7f0e;
+        --primary: #667eea;
+        --primary-600: #667eea;
+        --primary-50: #eef2ff;
+        --accent: #f59e0b;
+        --accent-600: #d97706;
         --success: #22c55e;
         --warning: #f59e0b;
         --error: #ef4444;
@@ -144,14 +154,28 @@ st.markdown("""
         --radius-lg: 18px;
         --glass-bg: rgba(255, 255, 255, 0.65);
         --glass-border: rgba(255, 255, 255, 0.4);
-        --focus-ring: rgba(31, 119, 180, 0.35);
+        --focus-ring: rgba(102, 126, 234, 0.35);
+        --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+        --text-xs: 0.75rem;
+        --text-sm: 0.875rem;
+        --text-base: 1rem;
+        --text-lg: 1.125rem;
+        --text-xl: 1.25rem;
+        --text-2xl: 1.5rem;
+        --text-3xl: 1.875rem;
+        --text-4xl: 2.25rem;
+        --weight-medium: 500;
+        --weight-semibold: 600;
+        --weight-bold: 700;
     }
 
     [data-theme="dark"] {
-        --primary: #60a5fa;
-        --primary-600: #3b82f6;
-        --primary-50: #0b1220;
-        --accent: #f59e0b;
+        --primary: #818cf8;
+        --primary-600: #667eea;
+        --primary-50: #1e1b4b;
+        --accent: #fbbf24;
+        --accent-600: #f59e0b;
         --success: #34d399;
         --warning: #fbbf24;
         --error: #f87171;
@@ -163,11 +187,16 @@ st.markdown("""
         --shadow-md: 0 20px 45px rgba(0, 0, 0, 0.5);
         --glass-bg: rgba(15, 23, 42, 0.7);
         --glass-border: rgba(148, 163, 184, 0.2);
-        --focus-ring: rgba(96, 165, 250, 0.35);
+        --focus-ring: rgba(129, 140, 248, 0.35);
     }
 
     body {
         color: var(--text);
+        font-family: var(--font-sans);
+        font-size: var(--text-base);
+    }
+    code, pre, .stCode {
+        font-family: var(--font-mono);
     }
 
     /* Skip link for keyboard users */
@@ -187,21 +216,22 @@ st.markdown("""
     }
 
     .main-header {
-        font-size: 2.4rem;
-        font-weight: 700;
+        font-size: var(--text-3xl);
+        font-weight: var(--weight-bold);
         color: var(--primary);
         margin-bottom: 0.5rem;
         letter-spacing: -0.5px;
+        font-family: var(--font-sans);
     }
     .section-title {
-        font-size: 1.25rem;
-        font-weight: 600;
+        font-size: var(--text-xl);
+        font-weight: var(--weight-semibold);
         margin: 0.5rem 0 0.75rem 0;
         color: var(--text);
     }
     .section-subtitle {
         color: var(--muted);
-        font-size: 0.95rem;
+        font-size: var(--text-sm);
         margin-bottom: 0.5rem;
     }
     .status-badge {
@@ -233,14 +263,49 @@ st.markdown("""
         backdrop-filter: blur(18px);
         padding: 18px;
     }
+    .card-elevated {
+        background: var(--glass-bg);
+        border: 1px solid var(--glass-border);
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        backdrop-filter: blur(20px);
+        margin-bottom: 1rem;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .card-interactive:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+    }
+    .card-interactive {
+        background: var(--glass-bg);
+        border: 1px solid var(--glass-border);
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        backdrop-filter: blur(20px);
+        margin-bottom: 1rem;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    [data-testid="stFileUploader"] {
+        border: 2px dashed var(--border);
+        border-radius: 16px;
+        padding: 24px;
+        min-height: 120px;
+    }
+    [data-testid="stFileUploader"]:hover {
+        border-color: var(--primary);
+        background: var(--primary-50);
+    }
     .chip-button button {
         border-radius: 999px;
         padding: 6px 12px;
-        background: rgba(31, 119, 180, 0.08);
+        background: var(--primary-50);
         border: 1px solid var(--border);
+        font-weight: var(--weight-medium);
     }
     .chip-button button:hover {
-        background: rgba(31, 119, 180, 0.18);
+        background: rgba(102, 126, 234, 0.18);
     }
 
     /* Streamlit component styling */
@@ -254,9 +319,29 @@ st.markdown("""
         outline-offset: 2px;
         box-shadow: 0 0 0 6px var(--focus-ring);
     }
+    .stButton > button:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+        box-shadow: 0 0 0 6px var(--focus-ring);
+    }
     .stButton > button:hover {
         transform: translateY(-1px);
         box-shadow: var(--shadow-sm);
+    }
+    .stTextArea textarea:focus-visible, .stTextInput input:focus-visible,
+    .stSelectbox select:focus-visible, .stNumberInput input:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+    }
+    .card:hover, .card-elevated:hover {
+        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.1);
+    }
+    .content-fade-in {
+        animation: contentFadeIn 0.35s ease-out;
+    }
+    @keyframes contentFadeIn {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
     }
     div[data-testid="stMetric"] {
         background: var(--card-bg);
@@ -315,24 +400,54 @@ st.markdown("""
         50% { opacity: 0.6; }
     }
 
-    /* Responsive adjustments */
-    @media (max-width: 768px) {
+    /* Responsive: small screens */
+    @media (max-width: 640px) {
         .main-header {
-            font-size: 1.8rem;
+            font-size: 1.6rem;
+        }
+        .card-elevated, .card, .glass-card {
+            padding: 16px;
         }
         div[data-testid="stMetric"] {
             padding: 8px 10px;
         }
         .stButton > button {
             width: 100%;
+            min-height: 44px;
+            padding: 10px 16px;
         }
         div[data-testid="stHorizontalBlock"] {
             flex-direction: column;
             gap: 0.75rem;
         }
     }
+    /* Responsive: tablet */
+    @media (min-width: 641px) and (max-width: 1024px) {
+        .main-header {
+            font-size: 2rem;
+        }
+        .stButton > button {
+            min-height: 44px;
+        }
+    }
+    /* Touch targets */
+    @media (max-width: 1024px) {
+        .stButton > button {
+            min-height: 44px;
+        }
+    }
     </style>
 """, unsafe_allow_html=True)
+
+
+def card_open(class_name: str = "card-elevated"):
+    """Render opening div for a card wrapper. Call card_close() after content."""
+    st.markdown(f'<div class="{class_name}" role="region">', unsafe_allow_html=True)
+
+
+def card_close():
+    """Render closing div for a card wrapper."""
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -593,17 +708,51 @@ def render_ingestion_result(result: Dict, session_id_input: Optional[str] = None
     """Render ingestion results for file, URL, or Supabase imports."""
     if result.get("success"):
         save_session_id(result.get("session_id"))
+        card_open("card-elevated")
         st.success("✅ File processed successfully!")
         
         metadata = result.get("metadata", {})
+        session_id = result.get("session_id")
+        tables_data = get_session_tables_for_display(session_id) if session_id else None
+        tables_map = tables_data.get("tables", {}) if tables_data else {}
+        table_count = metadata.get("table_count", 0)
+        file_type = metadata.get("file_type", "unknown").upper()
+        # Compact summary row
+        row_total = 0
+        col_total = 0
+        if tables_map:
+            for t in tables_map.values():
+                row_total += t.get("row_count", 0) or 0
+                cols = t.get("column_count", 0) or len(t.get("columns", []))
+                if cols > col_total:
+                    col_total = cols
+        summary_parts = [f"{table_count} table(s)", f"{row_total:,} rows", f"{col_total} cols", file_type]
+        st.caption(" · ".join(summary_parts))
+        
+        # CTAs
+        cta1, cta2, cta3 = st.columns([1, 1, 2])
+        with cta1:
+            if st.button("Start Exploring", key="ingestion_cta_explore", type="primary"):
+                st.session_state.upload_result_go_tab = "explore"
+                st.rerun()
+        with cta2:
+            if st.button("View Details", key="ingestion_cta_details"):
+                st.session_state.expand_table_preview = True
+                st.rerun()
+        if st.session_state.get("upload_result_go_tab") == "explore":
+            st.info("👉 Open the **Chatbot** or **Visualization Centre** tab above to explore your data.")
+            if st.button("Dismiss", key="ingestion_dismiss"):
+                st.session_state.upload_result_go_tab = None
+                st.rerun()
+        
         st.markdown("---")
         st.header("📈 Processing Results")
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("File Type", metadata.get("file_type", "unknown").upper())
+            st.metric("File Type", file_type)
         with col2:
-            st.metric("Tables Found", metadata.get("table_count", 0))
+            st.metric("Tables Found", table_count)
         with col3:
             st.metric("Processing Time", f"{metadata.get('processing_time', 0)}s")
         with col4:
@@ -621,29 +770,27 @@ def render_ingestion_result(result: Dict, session_id_input: Optional[str] = None
         
         tables = result.get("tables", [])
         if tables:
-            st.header(f"📊 Extracted Tables ({len(tables)})")
-            session_id = result.get("session_id")
-            tables_data = get_session_tables_for_display(session_id) if session_id else None
-            tables_map = tables_data.get("tables", {}) if tables_data else {}
             table_names = list(tables_map.keys())
-            
-            if len(tables) > 1:
-                tab_names = [table_names[i] if i < len(table_names) else f"Table {i+1}" for i in range(len(tables))]
-                tabs = st.tabs(tab_names)
-                
-                for idx, tab in enumerate(tabs):
-                    with tab:
-                        if idx < len(table_names):
-                            table_name = table_names[idx]
-                            display_table_info(tables_map.get(table_name, tables[idx]), idx, session_id, table_name)
-                        else:
-                            display_table_info(tables[idx], idx, session_id, None)
-            else:
-                table_name = table_names[0] if table_names else None
-                table_info = tables_map.get(table_name, tables[0]) if table_name else tables[0]
-                display_table_info(table_info, 0, session_id, table_name)
+            expand_preview = st.session_state.get("expand_table_preview", False)
+            with st.expander("View table preview", expanded=expand_preview):
+                st.header(f"📊 Extracted Tables ({len(tables)})")
+                if len(tables) > 1:
+                    tab_names = [table_names[i] if i < len(table_names) else f"Table {i+1}" for i in range(len(tables))]
+                    tabs = st.tabs(tab_names)
+                    for idx, tab in enumerate(tabs):
+                        with tab:
+                            if idx < len(table_names):
+                                table_name = table_names[idx]
+                                display_table_info(tables_map.get(table_name, tables[idx]), idx, session_id, table_name)
+                            else:
+                                display_table_info(tables[idx], idx, session_id, None)
+                else:
+                    table_name = table_names[0] if table_names else None
+                    table_info = tables_map.get(table_name, tables[0]) if table_name else tables[0]
+                    display_table_info(table_info, 0, session_id, table_name)
         else:
             st.warning("No tables found in the uploaded file.")
+        card_close()
     else:
         error_msg = result.get("error", "Unknown error occurred")
         st.error(f"❌ Failed to process file: {error_msg}")
@@ -691,8 +838,10 @@ def render_onboarding_tip(title: str, steps: List[str], cta_label: Optional[str]
 
 def render_upload_tab():
     """Render the Upload tab content."""
-    st.header("📤 Upload File")
-    st.caption("Upload a file to start exploring your data. We will extract tables and prepare them for analysis.")
+    card_open("card-elevated")
+    st.markdown('<p class="section-subtitle" style="margin-top:0;">Upload Your Data</p>', unsafe_allow_html=True)
+    st.header("📤 Upload Your Data")
+    st.caption("Drag & drop or click to upload. We will extract tables and prepare them for analysis.")
 
     render_onboarding_tip(
         "Upload in 3 steps",
@@ -717,13 +866,32 @@ def render_upload_tab():
         st.markdown("**3. Explore**")
         st.caption("Visualize and query your data")
     
+    # File type pills (set selectbox value on click)
+    if "upload_file_type_hint" not in st.session_state:
+        st.session_state.upload_file_type_hint = "Auto-detect"
+    st.markdown("**File type** (optional)")
+    pill_col1, pill_col2, pill_col3, _ = st.columns([1, 1, 1, 3])
+    with pill_col1:
+        if st.button("CSV", key="pill_csv", use_container_width=True):
+            st.session_state.upload_file_type_hint = "csv"
+            st.rerun()
+    with pill_col2:
+        if st.button("XLSX", key="pill_xlsx", use_container_width=True):
+            st.session_state.upload_file_type_hint = "excel"
+            st.rerun()
+    with pill_col3:
+        if st.button("PNG", key="pill_png", use_container_width=True):
+            st.session_state.upload_file_type_hint = "image"
+            st.rerun()
+    
     # File uploader
     uploaded_file = st.file_uploader(
         "Choose a file to upload",
         type=['csv', 'xlsx', 'xls', 'png', 'jpg', 'jpeg', 'tiff', 'bmp'],
         help="Supported formats: CSV, Excel, Images"
     )
-    st.caption("Tip: For large files, prefer CSV or Excel for faster processing.")
+    st.caption("CSV, Excel, Images supported. Max 100MB. For large files, prefer CSV or Excel for faster processing.")
+    card_close()
     
     # Detect file clear/removal - cleanup Redis
     current_file_id = uploaded_file.file_id if uploaded_file else None
@@ -734,12 +902,17 @@ def render_upload_tab():
         st.session_state.last_ingestion_file_id = None
     st.session_state.last_file_id = current_file_id
     
-    # Optional file type hint
+    # Optional file type hint (synced with pills)
+    opts = ["Auto-detect", "csv", "excel", "pdf", "image"]
+    idx = opts.index(st.session_state.upload_file_type_hint) if st.session_state.upload_file_type_hint in opts else 0
     file_type_hint = st.selectbox(
         "File Type (Optional - Auto-detected if not specified)",
-        ["Auto-detect", "csv", "excel", "pdf", "image"],
+        opts,
+        index=idx,
+        key="upload_file_type_select",
         help="Manually specify file type if auto-detection fails"
     )
+    st.session_state.upload_file_type_hint = file_type_hint
     file_type = None if file_type_hint == "Auto-detect" else file_type_hint
     
     # Session ID (optional)
@@ -778,9 +951,15 @@ def render_upload_tab():
         st.session_state.last_ingestion_result = None
         st.session_state.last_ingestion_file_id = None
         
-        # Show instructions when no file is uploaded
-        st.info("👆 Please upload a file to get started")
-        
+        render_empty_state(
+            title="No data loaded yet",
+            message="Upload a CSV, Excel, or image file above to extract tables and start exploring.",
+            primary_action_label="Upload File",
+            primary_action_key="empty_upload_btn",
+            secondary_action_label="How to use",
+            secondary_action_key="empty_howto_btn",
+            icon="📭",
+        )
         # Example section
         with st.expander("📖 How to use"):
             st.markdown("""
@@ -896,10 +1075,15 @@ def render_manipulation_tab():
     
     # Check if session exists
     if not session_id:
-        st.warning("⚠️ No active session found. Please upload a file in the Upload tab first.")
-        st.info("💡 After uploading a file, you can manipulate your data using natural language queries here.")
-        
-        # Show example queries
+        render_empty_state(
+            title="No data loaded yet",
+            message="Upload a file in the Upload tab first. Then you can transform your data with natural language here.",
+            primary_action_label="Go to Upload",
+            primary_action_key="empty_manipulation_upload",
+            secondary_action_label="Example queries",
+            secondary_action_key="empty_manipulation_examples",
+            icon="🔧",
+        )
         with st.expander("💡 Example Queries (after uploading data)"):
             st.markdown("""
             - "Remove rows with missing values in the 'email' column"
@@ -928,6 +1112,7 @@ def render_manipulation_tab():
         pass  # Non-critical, continue anyway
     
     # Session Info Card
+    card_open("card-elevated")
     st.subheader("📋 Session Information")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -969,9 +1154,10 @@ def render_manipulation_tab():
             with col3:
                 st.metric("Table Name", selected_table)
     
-    st.divider()
+    card_close()
     
     # Version History Graph Section
+    card_open("card-elevated")
     st.subheader("📜 Version History")
     st.caption("Track transformations over time. Filter versions and branch safely.")
     
@@ -1040,132 +1226,157 @@ def render_manipulation_tab():
             st.caption("Select a version to view details and branch.")
         
         graph_data = _normalize_graph(graph_data, current_version, search_text, keep_last_n)
+        
+        view_mode = st.radio(
+            "View",
+            ["Graph view", "Timeline view"],
+            key="manipulation_version_view",
+            horizontal=True,
+            label_visibility="collapsed",
+        )
     
-    # Render graph if nodes exist
+    # Render graph or timeline if nodes exist
     if graph_data.get("nodes"):
-        # Create Graphviz graph
-        dot = graphviz.Digraph(comment='Version History')
-        dot.attr(rankdir='LR')  # Left to right layout
-        dot.attr('node', shape='box', style='rounded,filled', fillcolor='lightblue')
-        
-        # Add nodes
         current_version = metadata.get("current_version", "v0")
-        for node in graph_data.get("nodes", []):
-            label = _format_version_label(node, current_version)
-            is_current = node.get("id") == current_version
-            fill = "lightgreen" if is_current else "lightblue"
-            dot.node(node["id"], label, fillcolor=fill)
-        
-        # Add edges
-        for edge in graph_data.get("edges", []):
-            label = edge.get("label", "")
-            dot.edge(edge["from"], edge["to"], label=label)
-        
-        # Display graph
-        st.graphviz_chart(dot.source)
-        
-        # Version selector and details
-        col1, col2 = st.columns([2, 2])
-        with col1:
-            version_options = [n["id"] for n in graph_data.get("nodes", [])]
-            selected_version = st.selectbox(
-                "Select version",
-                options=version_options,
-                index=version_options.index(current_version) if current_version in version_options else 0,
-                help="Pick a version to view details or branch from."
-            )
-        
-        with col2:
-            version_node = next((n for n in graph_data.get("nodes", []) if n["id"] == selected_version), None)
-            if version_node:
-                op_text = version_node.get("operation", "N/A")
-                ts = version_node.get("timestamp")
-                ts_text = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "N/A"
-                st.markdown("**Version Details**")
-                st.write(f"**Operation:** {op_text}")
-                if version_node.get("query"):
-                    st.write(f"**Query:** {version_node.get('query')}")
-                st.write(f"**Created:** {ts_text}")
-        
-        # Branching controls
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            confirm_branch = st.checkbox(
-                "Confirm branch to selected version",
-                value=False,
-                help="Confirm before changing the active version"
-            )
-        with col2:
-            branch_button = st.button("🌿 Branch", type="secondary", help="Create a new branch from the selected version")
-        
-        if branch_button:
-            if selected_version == current_version:
-                st.info("You are already on this version.")
-            elif not confirm_branch:
-                st.warning("Please confirm the branch action first.")
-            else:
-                with st.spinner("Branching to selected version..."):
-                    try:
-                        branch_response = requests.post(
-                            f"{FASTAPI_URL}/api/session/{session_id}/branch",
-                            json={"version_id": selected_version},
-                            timeout=10
-                        )
-                        if branch_response.status_code == 200:
-                            st.success(f"✅ Branched to {selected_version}. New operations will start from here.")
-                            st.rerun()
-                        else:
-                            st.error("Failed to branch to version.")
-                    except Exception as e:
-                        st.error(f"Error branching: {e}")
-        
-        # Version details expander (expanded details)
-        if selected_version:
-            with st.expander(f"📋 Version Details: {selected_version}"):
-                version_node = next((n for n in graph_data.get("nodes", []) if n["id"] == selected_version), None)
-                if version_node:
-                    st.write(f"**Operation:** {version_node.get('operation', 'N/A')}")
-                    if version_node.get('query'):
-                        st.write(f"**Query:** {version_node.get('query')}")
-                    if version_node.get('timestamp'):
-                        dt = datetime.fromtimestamp(version_node['timestamp'])
-                        st.write(f"**Created:** {dt.strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        # Pruning controls
-        with st.expander("🗑️ Prune Versions"):
-            col1, col2 = st.columns([2, 1])
+        if st.session_state.get("manipulation_version_view", "Graph view") == "Timeline view":
+            # Timeline view: horizontal version cards
+            st.caption("Click Branch to create a new branch from that version.")
+            nodes_list = graph_data.get("nodes", [])
+            # Show up to 8 in a row, then next row
+            chunk = 4
+            for i in range(0, len(nodes_list), chunk):
+                cols = st.columns(min(chunk, len(nodes_list) - i))
+                for j, node in enumerate(nodes_list[i : i + chunk]):
+                    with cols[j]:
+                        vid = node.get("id", "?")
+                        op = (node.get("operation") or node.get("label", "Operation"))[:40]
+                        ts = node.get("timestamp")
+                        ts_text = datetime.fromtimestamp(ts).strftime("%H:%M") if ts else ""
+                        is_current = vid == current_version
+                        st.markdown(f"**{vid}**" + (" *(current)*" if is_current else ""))
+                        st.caption(op + (" …" if len((node.get("operation") or "") or (node.get("label") or "")) > 40 else ""))
+                        st.caption(ts_text)
+                        if st.button("Branch", key=f"timeline_branch_{vid}", type="secondary"):
+                            try:
+                                r = requests.post(
+                                    f"{FASTAPI_URL}/api/session/{session_id}/branch",
+                                    json={"version_id": vid},
+                                    timeout=10,
+                                )
+                                if r.status_code == 200:
+                                    st.success(f"Branched to {vid}")
+                                    st.rerun()
+                                else:
+                                    st.error("Branch failed")
+                            except Exception as e:
+                                st.error(str(e))
+            st.markdown("---")
+        else:
+            # Graph view
+            dot = graphviz.Digraph(comment='Version History')
+            dot.attr(rankdir='LR')
+            dot.attr('node', shape='box', style='rounded,filled', fillcolor='lightblue')
+            for node in graph_data.get("nodes", []):
+                label = _format_version_label(node, current_version)
+                is_current = node.get("id") == current_version
+                fill = "lightgreen" if is_current else "lightblue"
+                dot.node(node["id"], label, fillcolor=fill)
+            for edge in graph_data.get("edges", []):
+                dot.edge(edge["from"], edge["to"], label=edge.get("label", ""))
+            st.graphviz_chart(dot.source)
+            col1, col2 = st.columns([2, 2])
             with col1:
-                keep_n = st.number_input(
-                    "Keep last N versions",
-                    min_value=1,
-                    max_value=100,
-                    value=len(graph_data.get("nodes", [])),
-                    help="Prune old versions, keeping only the most recent N"
+                version_options = [n["id"] for n in graph_data.get("nodes", [])]
+                selected_version = st.selectbox(
+                    "Select version",
+                    options=version_options,
+                    index=version_options.index(current_version) if current_version in version_options else 0,
+                    help="Pick a version to view details or branch from."
                 )
             with col2:
-                prune_button = st.button("Prune", type="secondary", help="Remove old versions and keep the most recent N")
-            
-            if prune_button:
-                with st.spinner("Pruning versions..."):
-                    try:
-                        prune_response = requests.post(
-                            f"{FASTAPI_URL}/api/session/{session_id}/prune_versions",
-                            json={"keep_last_n": int(keep_n)},
-                            timeout=10
-                        )
-                        if prune_response.status_code == 200:
-                            st.success(f"✅ Pruned versions. Kept last {keep_n}.")
-                            st.rerun()
-                        else:
-                            st.error("Failed to prune versions.")
-                    except Exception as e:
-                        st.error(f"Error pruning: {e}")
+                version_node = next((n for n in graph_data.get("nodes", []) if n["id"] == selected_version), None)
+                if version_node:
+                    op_text = version_node.get("operation", "N/A")
+                    ts = version_node.get("timestamp")
+                    ts_text = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "N/A"
+                    st.markdown("**Version Details**")
+                    st.write(f"**Operation:** {op_text}")
+                    if version_node.get("query"):
+                        st.write(f"**Query:** {version_node.get('query')}")
+                    st.write(f"**Created:** {ts_text}")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                confirm_branch = st.checkbox(
+                    "Confirm branch to selected version",
+                    value=False,
+                    help="Confirm before changing the active version"
+                )
+            with col2:
+                branch_button = st.button("🌿 Branch", type="secondary", help="Create a new branch from the selected version")
+            if branch_button:
+                if selected_version == current_version:
+                    st.info("You are already on this version.")
+                elif not confirm_branch:
+                    st.warning("Please confirm the branch action first.")
+                else:
+                    with st.spinner("Branching to selected version..."):
+                        try:
+                            branch_response = requests.post(
+                                f"{FASTAPI_URL}/api/session/{session_id}/branch",
+                                json={"version_id": selected_version},
+                                timeout=10
+                            )
+                            if branch_response.status_code == 200:
+                                st.success(f"✅ Branched to {selected_version}. New operations will start from here.")
+                                st.rerun()
+                            else:
+                                st.error("Failed to branch to version.")
+                        except Exception as e:
+                            st.error(f"Error branching: {e}")
+            if selected_version:
+                with st.expander(f"📋 Version Details: {selected_version}"):
+                    version_node = next((n for n in graph_data.get("nodes", []) if n["id"] == selected_version), None)
+                    if version_node:
+                        st.write(f"**Operation:** {version_node.get('operation', 'N/A')}")
+                        if version_node.get('query'):
+                            st.write(f"**Query:** {version_node.get('query')}")
+                        if version_node.get('timestamp'):
+                            dt = datetime.fromtimestamp(version_node['timestamp'])
+                            st.write(f"**Created:** {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+            with st.expander("🗑️ Prune Versions"):
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    keep_n = st.number_input(
+                        "Keep last N versions",
+                        min_value=1,
+                        max_value=100,
+                        value=len(graph_data.get("nodes", [])),
+                        help="Prune old versions, keeping only the most recent N"
+                    )
+                with col2:
+                    prune_button = st.button("Prune", type="secondary", help="Remove old versions and keep the most recent N")
+                if prune_button:
+                    with st.spinner("Pruning versions..."):
+                        try:
+                            prune_response = requests.post(
+                                f"{FASTAPI_URL}/api/session/{session_id}/prune_versions",
+                                json={"keep_last_n": int(keep_n)},
+                                timeout=10
+                            )
+                            if prune_response.status_code == 200:
+                                st.success(f"✅ Pruned versions. Kept last {keep_n}.")
+                                st.rerun()
+                            else:
+                                st.error("Failed to prune versions.")
+                        except Exception as e:
+                            st.error(f"Error pruning: {e}")
     else:
         st.info("📝 Upload a file and perform operations to see version history.")
     
-    st.divider()
+    card_close()
     
     # Natural Language Query Input
+    card_open("card-elevated")
     st.subheader("💬 Natural Language Query")
     st.caption("Describe the transformation you want. You can chain multiple steps in one sentence.")
     query = st.text_area(
@@ -1174,6 +1385,20 @@ def render_manipulation_tab():
         height=100,
         key="nl_query_input"
     )
+    st.caption("Try:")
+    sug_a, sug_b, sug_c = st.columns(3)
+    with sug_a:
+        if st.button("Remove missing values", key="sug_missing"):
+            st.session_state["nl_query_input"] = "Remove rows with missing values"
+            st.rerun()
+    with sug_b:
+        if st.button("Sort by column descending", key="sug_sort"):
+            st.session_state["nl_query_input"] = "Sort by revenue descending"
+            st.rerun()
+    with sug_c:
+        if st.button("Group and aggregate", key="sug_group"):
+            st.session_state["nl_query_input"] = "Group by department and calculate average salary"
+            st.rerun()
     
     # Quick action chips
     st.markdown("**Quick actions**")
@@ -1224,6 +1449,8 @@ def render_manipulation_tab():
                 version_id = op.get("version_id", "")
                 version_text = f" [{version_id}]" if version_id else ""
                 st.text(f"{idx}. [{dt.strftime('%H:%M:%S')}]{version_text} {op.get('description', op.get('operation', 'Unknown'))}")
+    
+    card_close()
     
     # Execute query
     if execute_button and query:
@@ -1352,6 +1579,44 @@ def render_manipulation_tab():
             st.info("Full table data not available.")
 
 
+def _render_sidebar_session_block():
+    """Render compact session block in sidebar when current_session_id is set."""
+    session_id = st.session_state.get("current_session_id")
+    if not session_id:
+        return
+    metadata = get_session_metadata_for_display(session_id)
+    if not metadata:
+        return
+    file_name = metadata.get("file_name", "Current session")
+    if isinstance(file_name, str) and len(file_name) > 24:
+        file_name = file_name[:21] + "..."
+    table_count = metadata.get("table_count", 0)
+    created_at = metadata.get("created_at")
+    last_modified = ""
+    if created_at:
+        try:
+            if isinstance(created_at, (int, float)):
+                from datetime import datetime
+                last_modified = datetime.fromtimestamp(created_at).strftime("%b %d, %H:%M")
+            else:
+                last_modified = str(created_at)[:16]
+        except Exception:
+            pass
+    st.subheader("📂 Current data")
+    st.caption(file_name)
+    st.caption(f"Tables: {table_count}" + (f" · {last_modified}" if last_modified else ""))
+    col_switch, col_upload = st.columns(2)
+    with col_switch:
+        if st.button("Switch data", key="sidebar_switch_data", help="Clear session and choose another dataset"):
+            cleanup_current_session()
+            st.rerun()
+    with col_upload:
+        if st.button("Upload new", key="sidebar_upload_new", help="Clear session; use Upload tab to add new data"):
+            cleanup_current_session()
+            st.rerun()
+    st.divider()
+
+
 def main():
     """Main Streamlit application."""
     
@@ -1390,8 +1655,14 @@ def main():
                 st.rerun()
     
     # Accessibility: Skip link target
-    st.markdown('<a class="skip-link" href="#main-content">Skip to main content</a>', unsafe_allow_html=True)
-    st.markdown('<div id="main-content"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<a class="skip-link" href="#main-content" aria-label="Skip to main content">Skip to main content</a>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div id="main-content" class="content-fade-in" role="main" aria-label="Main content"></div>',
+        unsafe_allow_html=True,
+    )
 
     # Header
     st.markdown('<div class="main-header">📊 Data Analyst Platform</div>', unsafe_allow_html=True)
@@ -1400,6 +1671,9 @@ def main():
     # Sidebar
     with st.sidebar:
         st.header("⚙️ Settings")
+
+        # Compact session block when data is loaded
+        _render_sidebar_session_block()
 
         st.subheader("🎨 Theme")
         st.session_state.ui_theme = st.selectbox(

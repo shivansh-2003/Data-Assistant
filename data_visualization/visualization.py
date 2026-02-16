@@ -20,6 +20,7 @@ from .chart_compositions import generate_combo_chart
 # Import dashboard builder
 from .dashboard_builder import DashboardBuilder
 from components.data_table import render_advanced_table
+from components.empty_state import render_empty_state
 
 # Create default builder instance
 _default_dashboard_builder = DashboardBuilder()
@@ -358,8 +359,15 @@ def render_visualization_tab():
     
     # Check if session exists
     if not session_id:
-        st.warning("⚠️ No active session found. Please upload a file in the Upload tab first.")
-        st.info("💡 After uploading a file, you can create visualizations here.")
+        render_empty_state(
+            title="No data loaded yet",
+            message="Upload a file in the Upload tab first. Then create charts and dashboards here.",
+            primary_action_label="Go to Upload",
+            primary_action_key="empty_viz_upload",
+            secondary_action_label="How it works",
+            secondary_action_key="empty_viz_help",
+            icon="📈",
+        )
         return
     
     # Get session tables and select table
@@ -425,402 +433,375 @@ def render_visualization_tab():
     
     st.divider()
     
-    # Smart Recommendations Section
-    # Store recommendations in session state to persist after rerun
-    if 'viz_recommendations' not in st.session_state:
-        st.session_state['viz_recommendations'] = None
-    if 'viz_user_goal_text' not in st.session_state:
-        st.session_state['viz_user_goal_text'] = ""
+    # Split view: left = recommendations + chart controls, right = live preview
+    viz_left_col, viz_right_col = st.columns([2, 3])
     
-    # Determine if expander should be expanded (show if recommendations exist)
-    expander_expanded = st.session_state.get('viz_recommendations') is not None
-    
-    with st.expander("🤖 Smart Chart Recommendations", expanded=expander_expanded):
-        st.caption("Describe your goal to get tailored chart suggestions.")
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            user_goal = st.text_input(
-                "Describe your visualization goal (optional):",
-                placeholder="e.g., Show sales trends over time, Compare revenue by department",
-                key="viz_user_goal",
-                value=st.session_state.get('viz_user_goal_text', '')
-            )
-        with col2:
-            recommend_button = st.button("✨ Get Recommendations", type="primary", width='stretch')
+    with viz_left_col:
+        # Smart Recommendations Section (wrapped in card)
+        st.markdown('<div class="card-elevated" role="region">', unsafe_allow_html=True)
+        # Store recommendations in session state to persist after rerun
+        if 'viz_recommendations' not in st.session_state:
+            st.session_state['viz_recommendations'] = None
+        if 'viz_user_goal_text' not in st.session_state:
+            st.session_state['viz_user_goal_text'] = ""
         
-        if recommend_button:
-            # Store user goal in session state
-            st.session_state['viz_user_goal_text'] = user_goal
-            with st.spinner("🤔 Analyzing data and generating recommendations..."):
-                try:
-                    recommendations = get_chart_recommendations(df, user_goal if user_goal else None)
-                    # Store recommendations in session state to persist after rerun
-                    st.session_state['viz_recommendations'] = recommendations
-                except Exception as e:
-                    st.error(f"❌ Error generating recommendations: {str(e)}")
-                    st.info("💡 Falling back to rule-based recommendations...")
-                    recommendations = []
-                    st.session_state['viz_recommendations'] = None
-                
-                if recommendations:
-                    st.success(f"✅ Found {len(recommendations)} chart recommendations!")
-                    st.markdown("---")
-                    
-                    for idx, rec in enumerate(recommendations, 1):
-                        with st.container():
-                            col_rec1, col_rec2 = st.columns([1, 4])
-                            with col_rec1:
-                                st.metric("Rank", f"#{idx}", f"Relevance: {rec.get('relevance', 'N/A')}")
-                            with col_rec2:
-                                st.markdown(f"**Chart Type:** `{rec['chart_type'].upper()}`")
-                                if rec.get('x_column'):
-                                    st.markdown(f"**X-Axis:** `{rec['x_column']}`")
-                                if rec.get('y_column'):
-                                    st.markdown(f"**Y-Axis:** `{rec['y_column']}`")
-                                st.caption(f"💡 {rec.get('reasoning', 'No reasoning provided')}")
-                                
-                                # Quick apply button
-                                apply_key = f"apply_rec_{idx}_{rec['chart_type']}"
-                                if st.button(f"✨ Apply This Recommendation", key=apply_key):
-                                    # Update session state for chart controls
-                                    st.session_state['viz_chart_type'] = rec['chart_type']
-                                    
-                                    # Set X column
-                                    if rec.get('x_column') and rec['x_column'] in df.columns:
-                                        st.session_state['viz_x_col'] = rec['x_column']
-                                    else:
-                                        st.session_state['viz_x_col'] = 'None'
-                                    
-                                    # Set Y column
-                                    if rec.get('y_column') and rec['y_column'] in df.columns:
-                                        st.session_state['viz_y_col'] = rec['y_column']
-                                    else:
-                                        st.session_state['viz_y_col'] = 'None'
-                                    
-                                    # Set color column to None (optional)
-                                    if 'viz_color_col' not in st.session_state:
-                                        st.session_state['viz_color_col'] = 'None'
-                                    
-                                    st.success(f"✅ Applied recommendation #{idx}! Chart controls updated.")
-                                    # Force rerun to update the selectboxes
-                                    st.rerun()
-                            
-                            if idx < len(recommendations):
-                                st.markdown("---")
-                else:
-                    st.warning("⚠️ Could not generate recommendations. Please try manual selection.")
-                    st.session_state['viz_recommendations'] = None
+        # Determine if expander should be expanded (show if recommendations exist)
+        expander_expanded = st.session_state.get('viz_recommendations') is not None
         
-        # Display stored recommendations if they exist (persists after apply button click)
-        stored_recommendations = st.session_state.get('viz_recommendations')
-        if stored_recommendations and not recommend_button:
-            st.markdown("---")
-            st.caption("💡 **Saved Recommendations** (click Apply to use):")
+        with st.expander("🤖 Smart Chart Recommendations", expanded=expander_expanded):
+            st.caption("Describe your goal to get tailored chart suggestions.")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                user_goal = st.text_input(
+                    "Describe your visualization goal (optional):",
+                    placeholder="e.g., Show sales trends over time, Compare revenue by department",
+                    key="viz_user_goal",
+                    value=st.session_state.get('viz_user_goal_text', '')
+                )
+            with col2:
+                recommend_button = st.button("✨ Get Recommendations", type="primary", width='stretch')
             
-            for idx, rec in enumerate(stored_recommendations, 1):
-                with st.container():
-                    col_rec1, col_rec2 = st.columns([1, 4])
-                    with col_rec1:
-                        st.metric("Rank", f"#{idx}", f"Relevance: {rec.get('relevance', 'N/A')}")
-                    with col_rec2:
-                        st.markdown(f"**Chart Type:** `{rec['chart_type'].upper()}`")
-                        if rec.get('x_column'):
-                            st.markdown(f"**X-Axis:** `{rec['x_column']}`")
-                        if rec.get('y_column'):
-                            st.markdown(f"**Y-Axis:** `{rec['y_column']}`")
-                        st.caption(f"💡 {rec.get('reasoning', 'No reasoning provided')}")
-                        
-                        # Quick apply button (persistent version with different key)
-                        apply_key_persist = f"apply_rec_persist_{idx}_{rec['chart_type']}"
-                        if st.button(f"✨ Apply This Recommendation", key=apply_key_persist):
-                            # Update session state for chart controls
-                            st.session_state['viz_chart_type'] = rec['chart_type']
-                            
-                            # Set X column
-                            if rec.get('x_column') and rec['x_column'] in df.columns:
-                                st.session_state['viz_x_col'] = rec['x_column']
-                            else:
-                                st.session_state['viz_x_col'] = 'None'
-                            
-                            # Set Y column
-                            if rec.get('y_column') and rec['y_column'] in df.columns:
-                                st.session_state['viz_y_col'] = rec['y_column']
-                            else:
-                                st.session_state['viz_y_col'] = 'None'
-                            
-                            # Set color column to None (optional)
-                            if 'viz_color_col' not in st.session_state:
-                                st.session_state['viz_color_col'] = 'None'
-                            
-                            st.success(f"✅ Applied recommendation #{idx}! Chart controls updated.")
-                            # Force rerun to update the selectboxes
-                            st.rerun()
+            if recommend_button:
+                # Store user goal in session state
+                st.session_state['viz_user_goal_text'] = user_goal
+                with st.spinner("🤔 Analyzing data and generating recommendations..."):
+                    try:
+                        recommendations = get_chart_recommendations(df, user_goal if user_goal else None)
+                        # Store recommendations in session state to persist after rerun
+                        st.session_state['viz_recommendations'] = recommendations
+                    except Exception as e:
+                        st.error(f"❌ Error generating recommendations: {str(e)}")
+                        st.info("💡 Falling back to rule-based recommendations...")
+                        recommendations = []
+                        st.session_state['viz_recommendations'] = None
                     
-                    if idx < len(stored_recommendations):
+                    if recommendations:
+                        st.success(f"✅ Found {len(recommendations)} chart recommendations!")
                         st.markdown("---")
-    
-    st.divider()
-
-    # Quick templates for fast setup
-    st.subheader("⚡ Quick Chart Templates")
-    st.caption("Apply a recommended configuration with one click.")
-    qt1, qt2, qt3, qt4 = st.columns(4)
-    with qt1:
-        if st.button("📊 Bar: Category vs Value", key="qt_bar"):
-            st.session_state['viz_chart_type'] = 'bar'
-    with qt2:
-        if st.button("📈 Line: Trend over Time", key="qt_line"):
-            st.session_state['viz_chart_type'] = 'line'
-    with qt3:
-        if st.button("🔵 Scatter: Relationship", key="qt_scatter"):
-            st.session_state['viz_chart_type'] = 'scatter'
-    with qt4:
-        if st.button("📊 Histogram: Distribution", key="qt_hist"):
-            st.session_state['viz_chart_type'] = 'histogram'
-    
-    # Chart Mode Selection (Basic vs Compositions)
-    if 'viz_chart_mode' not in st.session_state:
-        st.session_state['viz_chart_mode'] = 'basic'
-    
-    chart_mode = st.radio(
-        "Chart Mode",
-        options=['basic', 'combo'],
-        format_func=lambda x: {
-            'basic': '📊 Basic Chart',
-            'combo': '🔀 Combo Chart (Dual Y-Axes)'
-        }[x],
-        key="viz_chart_mode",
-        horizontal=True
-    )
-    st.caption("Use Basic for single metrics, Combo for dual-axis comparisons.")
-    
-    st.divider()
-    
-    # Chart Controls in main area (using expander for cleaner UI)
-    with st.expander("📊 Chart Controls", expanded=True):
-        st.caption("Pick chart type, columns, and optional grouping to build your visualization.")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            # Chart type selector
-            chart_options = ['bar', 'line', 'scatter', 'area', 'box', 'histogram', 'pie', 'heatmap']
-            # Initialize session state if not exists
-            if 'viz_chart_type' not in st.session_state:
-                st.session_state['viz_chart_type'] = 'bar'
+                        
+                        for idx, rec in enumerate(recommendations, 1):
+                            with st.container():
+                                col_rec1, col_rec2 = st.columns([1, 4])
+                                with col_rec1:
+                                    st.metric("Rank", f"#{idx}", f"Relevance: {rec.get('relevance', 'N/A')}")
+                                with col_rec2:
+                                    st.markdown(f"**Chart Type:** `{rec['chart_type'].upper()}`")
+                                    if rec.get('x_column'):
+                                        st.markdown(f"**X-Axis:** `{rec['x_column']}`")
+                                    if rec.get('y_column'):
+                                        st.markdown(f"**Y-Axis:** `{rec['y_column']}`")
+                                    st.caption(f"💡 {rec.get('reasoning', 'No reasoning provided')}")
+                                    
+                                    # Quick apply button
+                                    apply_key = f"apply_rec_{idx}_{rec['chart_type']}"
+                                    if st.button(f"✨ Apply This Recommendation", key=apply_key):
+                                        # Update session state for chart controls
+                                        st.session_state['viz_chart_type'] = rec['chart_type']
+                                        
+                                        # Set X column
+                                        if rec.get('x_column') and rec['x_column'] in df.columns:
+                                            st.session_state['viz_x_col'] = rec['x_column']
+                                        else:
+                                            st.session_state['viz_x_col'] = 'None'
+                                        
+                                        # Set Y column
+                                        if rec.get('y_column') and rec['y_column'] in df.columns:
+                                            st.session_state['viz_y_col'] = rec['y_column']
+                                        else:
+                                            st.session_state['viz_y_col'] = 'None'
+                                        
+                                        # Set color column to None (optional)
+                                        if 'viz_color_col' not in st.session_state:
+                                            st.session_state['viz_color_col'] = 'None'
+                                        
+                                        st.success(f"✅ Applied recommendation #{idx}! Chart controls updated.")
+                                        # Force rerun to update the selectboxes
+                                        st.rerun()
+                                
+                                if idx < len(recommendations):
+                                    st.markdown("---")
+                    else:
+                        st.warning("⚠️ Could not generate recommendations. Please try manual selection.")
+                        st.session_state['viz_recommendations'] = None
             
-            # Validate session state value exists in options
-            if st.session_state.get('viz_chart_type') not in chart_options:
-                st.session_state['viz_chart_type'] = 'bar'
-            
-            # When using key, Streamlit automatically uses session state value
-            # Don't use index parameter as it conflicts with key
-            chart_type = st.selectbox(
-                "Chart Type",
-                options=chart_options,
-                format_func=_chart_label,
-                help="Bar for categories, Line for trends, Scatter for correlations, etc.",
-                key="viz_chart_type"
-            )
-        
-        with col2:
-            # Column selectors - smart defaults
-            cols = ['None'] + df.columns.tolist()
-            
-            # Initialize or get X column from session state
-            if 'viz_x_col' not in st.session_state:
-                # Default to first categorical column for X, or first column if none
-                default_x_idx = 0
-                if len(df.columns) > 0:
-                    for i, col in enumerate(df.columns):
-                        if not pd.api.types.is_numeric_dtype(df[col]):
-                            default_x_idx = i + 1
-                            break
-                    if default_x_idx == 0 and len(df.columns) > 0:
-                        default_x_idx = 1
-                st.session_state['viz_x_col'] = cols[default_x_idx]
-            
-            # Validate session state value exists in current columns
-            if st.session_state.get('viz_x_col') not in cols:
-                # Reset to None if column doesn't exist anymore
-                st.session_state['viz_x_col'] = 'None'
-            
-            # When using key, Streamlit automatically uses session state value
-            # Don't use index parameter as it conflicts with key
-            x_col = st.selectbox(
-                "X-Axis (or Category)", 
-                options=cols,
-                format_func=_column_label,
-                key="viz_x_col"
-            )
-        
-        with col3:
-            # Initialize or get Y column from session state
-            if 'viz_y_col' not in st.session_state:
-                # Default to first numeric column for Y, or second column if none
-                default_y_idx = 0
-                if len(df.columns) > 1:
-                    for i, col in enumerate(df.columns):
-                        if pd.api.types.is_numeric_dtype(df[col]):
-                            default_y_idx = i + 1
-                            break
-                    if default_y_idx == 0 and len(df.columns) > 1:
-                        default_y_idx = 2 if len(df.columns) > 1 else 1
-                st.session_state['viz_y_col'] = cols[default_y_idx]
-            
-            # Validate session state value exists in current columns
-            if st.session_state.get('viz_y_col') not in cols:
-                # Reset to None if column doesn't exist anymore
-                st.session_state['viz_y_col'] = 'None'
-            
-            # When using key, Streamlit automatically uses session state value
-            # Don't use index parameter as it conflicts with key
-            y_col = st.selectbox(
-                "Y-Axis (or Value)", 
-                options=cols,
-                format_func=_column_label,
-                key="viz_y_col"
-            )
-        
-        with col4:
-            # Initialize color column if not exists
-            if 'viz_color_col' not in st.session_state:
-                st.session_state['viz_color_col'] = 'None'
-            
-            # Validate session state value exists in current columns
-            if st.session_state.get('viz_color_col') not in cols:
-                st.session_state['viz_color_col'] = 'None'
-            
-            color_col = st.selectbox(
-                "Color/Group By (Optional)", 
-                options=cols,
-                format_func=_column_label,
-                key="viz_color_col"
-            )
-        
-        # Heatmap-specific multi-column selector
-        heatmap_columns = None
-        if chart_type == 'heatmap':
-            st.markdown("---")
-            st.subheader("🔥 Heatmap Column Selection")
-            st.markdown("**Select multiple columns for correlation matrix or pivot table**")
-            
-            # Initialize heatmap columns in session state (only if not exists)
-            if 'viz_heatmap_cols' not in st.session_state:
-                st.session_state['viz_heatmap_cols'] = []
-            
-            # Filter to only include columns that exist
-            available_cols = [col for col in df.columns.tolist() if col in df.columns]
-            
-            # Get current value from session state, but filter out columns that no longer exist
-            current_selection = [col for col in st.session_state.get('viz_heatmap_cols', []) if col in available_cols]
-            
-            # Multi-select for heatmap columns
-            # Don't modify session state after widget creation - Streamlit handles it automatically via key
-            selected_heatmap_cols = st.multiselect(
-                "Select Columns for Heatmap",
-                options=available_cols,
-                default=current_selection,
-                help="Select 2+ columns. Numeric columns will create correlation matrix. Mix of categorical and numeric creates pivot table.",
-                key="viz_heatmap_cols"
-            )
-            
-            # Use the selected columns directly (session state is automatically updated by Streamlit)
-            heatmap_columns = selected_heatmap_cols
-            
-            # Show info about selection
-            if len(selected_heatmap_cols) > 0:
-                numeric_count = sum(1 for col in selected_heatmap_cols if pd.api.types.is_numeric_dtype(df[col]))
-                categorical_count = len(selected_heatmap_cols) - numeric_count
+            # Display stored recommendations if they exist (persists after apply button click)
+            stored_recommendations = st.session_state.get('viz_recommendations')
+            if stored_recommendations and not recommend_button:
+                st.markdown("---")
+                st.caption("💡 **Saved Recommendations** (click Apply to use):")
                 
-                if len(selected_heatmap_cols) < 2:
-                    st.warning("⚠️ Please select at least 2 columns for heatmap")
-                elif numeric_count == len(selected_heatmap_cols):
-                    st.info(f"✅ {numeric_count} numeric columns selected → Will create correlation matrix")
-                elif numeric_count >= 2:
-                    st.info(f"✅ {numeric_count} numeric + {categorical_count} categorical → Will create correlation matrix with numeric columns")
-                elif numeric_count >= 1 and categorical_count >= 1:
-                    st.info(f"✅ {numeric_count} numeric + {categorical_count} categorical → Will create pivot table")
-                else:
-                    st.warning("⚠️ Need at least 1 numeric column for heatmap")
-            else:
-                st.caption("💡 Select 2+ columns above. For correlation matrix, select numeric columns. For pivot table, select mix of categorical and numeric.")
+                for idx, rec in enumerate(stored_recommendations, 1):
+                    with st.container():
+                        col_rec1, col_rec2 = st.columns([1, 4])
+                        with col_rec1:
+                            st.metric("Rank", f"#{idx}", f"Relevance: {rec.get('relevance', 'N/A')}")
+                        with col_rec2:
+                            st.markdown(f"**Chart Type:** `{rec['chart_type'].upper()}`")
+                            if rec.get('x_column'):
+                                st.markdown(f"**X-Axis:** `{rec['x_column']}`")
+                            if rec.get('y_column'):
+                                st.markdown(f"**Y-Axis:** `{rec['y_column']}`")
+                            st.caption(f"💡 {rec.get('reasoning', 'No reasoning provided')}")
+                            
+                            # Quick apply button (persistent version with different key)
+                            apply_key_persist = f"apply_rec_persist_{idx}_{rec['chart_type']}"
+                            if st.button(f"✨ Apply This Recommendation", key=apply_key_persist):
+                                # Update session state for chart controls
+                                st.session_state['viz_chart_type'] = rec['chart_type']
+                                
+                                # Set X column
+                                if rec.get('x_column') and rec['x_column'] in df.columns:
+                                    st.session_state['viz_x_col'] = rec['x_column']
+                                else:
+                                    st.session_state['viz_x_col'] = 'None'
+                                
+                                # Set Y column
+                                if rec.get('y_column') and rec['y_column'] in df.columns:
+                                    st.session_state['viz_y_col'] = rec['y_column']
+                                else:
+                                    st.session_state['viz_y_col'] = 'None'
+                                
+                                # Set color column to None (optional)
+                                if 'viz_color_col' not in st.session_state:
+                                    st.session_state['viz_color_col'] = 'None'
+                                
+                                st.success(f"✅ Applied recommendation #{idx}! Chart controls updated.")
+                                # Force rerun to update the selectboxes
+                                st.rerun()
+                        
+                        if idx < len(stored_recommendations):
+                            st.markdown("---")
         
-        # Aggregation row
-        col_agg1, col_agg2 = st.columns([1, 3])
-        with col_agg1:
-            if y_col != 'None' and y_col in df.columns and pd.api.types.is_numeric_dtype(df[y_col]):
-                agg_options = ['none', 'sum', 'mean', 'count', 'min', 'max']
-                agg_func = st.selectbox("Aggregate Y By", options=agg_options, index=0, key="viz_agg")
-            else:
-                agg_func = 'none'
-                st.caption("Aggregation\n(requires numeric Y)")
-        with col_agg2:
-            st.caption("💡 Tip: Select columns above to generate chart instantly")
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.divider()
 
-        # Styling options
-        st.markdown("---")
-        style_col1, style_col2 = st.columns([2, 2])
-        with style_col1:
-            chart_title = st.text_input(
-                "Chart Title (optional)",
-                placeholder="e.g., Revenue by Region",
-                key="viz_title"
-            )
-        with style_col2:
-            palette_options = {
-                "Default": None,
-                "Vibrant": px.colors.qualitative.Bold,
-                "Pastel": px.colors.qualitative.Pastel,
-                "Prism": px.colors.qualitative.Prism,
-                "Dark24": px.colors.qualitative.Dark24
-            }
-            palette_choice = st.selectbox(
-                "Color Palette",
-                options=list(palette_options.keys()),
-                key="viz_palette"
-            )
-            color_palette = palette_options.get(palette_choice)
-    
-    # Composition-specific controls
-    composition_params = {}
-    if chart_mode != 'basic':
-        # Initialize composition params in session state if needed
-        if 'viz_composition_params' not in st.session_state:
-            st.session_state['viz_composition_params'] = {}
-        st.markdown("---")
-        st.subheader("🎨 Composition Settings")
+        # Quick templates for fast setup
+        st.subheader("⚡ Quick Chart Templates")
+        st.caption("Apply a recommended configuration with one click.")
+        qt1, qt2, qt3, qt4 = st.columns(4)
+        with qt1:
+            if st.button("📊 Bar: Category vs Value", key="qt_bar"):
+                st.session_state['viz_chart_type'] = 'bar'
+        with qt2:
+            if st.button("📈 Line: Trend over Time", key="qt_line"):
+                st.session_state['viz_chart_type'] = 'line'
+        with qt3:
+            if st.button("🔵 Scatter: Relationship", key="qt_scatter"):
+                st.session_state['viz_chart_type'] = 'scatter'
+        with qt4:
+            if st.button("📊 Histogram: Distribution", key="qt_hist"):
+                st.session_state['viz_chart_type'] = 'histogram'
         
-        if chart_mode == 'combo':
-            # Combo chart controls
-            col_comp1, col_comp2, col_comp3 = st.columns(3)
-            with col_comp1:
-                y2_col = st.selectbox(
-                    "Second Y-Axis Column",
+        # Chart Mode Selection (Basic vs Compositions)
+        if 'viz_chart_mode' not in st.session_state:
+            st.session_state['viz_chart_mode'] = 'basic'
+        
+        chart_mode = st.radio(
+            "Chart Mode",
+            options=['basic', 'combo'],
+            format_func=lambda x: {
+                'basic': '📊 Basic Chart',
+                'combo': '🔀 Combo Chart (Dual Y-Axes)'
+            }[x],
+            key="viz_chart_mode",
+            horizontal=True
+        )
+        st.caption("Use Basic for single metrics, Combo for dual-axis comparisons.")
+        
+        st.divider()
+        
+        # Chart Controls in main area (using expander for cleaner UI), wrapped in card
+        st.markdown('<div class="card-elevated" role="region">', unsafe_allow_html=True)
+        with st.expander("📊 Chart Controls", expanded=True):
+            st.caption("Pick chart type, columns, and optional grouping to build your visualization.")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                # Chart type selector
+                chart_options = ['bar', 'line', 'scatter', 'area', 'box', 'histogram', 'pie', 'heatmap']
+                # Initialize session state if not exists
+                if 'viz_chart_type' not in st.session_state:
+                    st.session_state['viz_chart_type'] = 'bar'
+                
+                # Validate session state value exists in options
+                if st.session_state.get('viz_chart_type') not in chart_options:
+                    st.session_state['viz_chart_type'] = 'bar'
+                
+                # When using key, Streamlit automatically uses session state value
+                chart_type = st.selectbox(
+                    "Chart Type",
+                    options=chart_options,
+                    format_func=_chart_label,
+                    help="Bar for categories, Line for trends, Scatter for correlations, etc.",
+                    key="viz_chart_type"
+                )
+            
+            with col2:
+                # Column selectors - smart defaults
+                cols = ['None'] + df.columns.tolist()
+                
+                # Initialize or get X column from session state
+                if 'viz_x_col' not in st.session_state:
+                    default_x_idx = 0
+                    if len(df.columns) > 0:
+                        for i, col in enumerate(df.columns):
+                            if not pd.api.types.is_numeric_dtype(df[col]):
+                                default_x_idx = i + 1
+                                break
+                        if default_x_idx == 0 and len(df.columns) > 0:
+                            default_x_idx = 1
+                    st.session_state['viz_x_col'] = cols[default_x_idx]
+                
+                if st.session_state.get('viz_x_col') not in cols:
+                    st.session_state['viz_x_col'] = 'None'
+                
+                x_col = st.selectbox(
+                    "X-Axis (or Category)", 
                     options=cols,
-                    key="viz_y2_col",
-                    help="Second metric for right y-axis"
+                    format_func=_column_label,
+                    key="viz_x_col"
                 )
-            with col_comp2:
-                chart1_type = st.selectbox(
-                    "First Chart Type",
-                    options=['bar', 'line', 'scatter', 'area'],
-                    index=0,
-                    key="viz_combo_chart1"
+            
+            with col3:
+                if 'viz_y_col' not in st.session_state:
+                    default_y_idx = 0
+                    if len(df.columns) > 1:
+                        for i, col in enumerate(df.columns):
+                            if pd.api.types.is_numeric_dtype(df[col]):
+                                default_y_idx = i + 1
+                                break
+                        if default_y_idx == 0 and len(df.columns) > 1:
+                            default_y_idx = 2 if len(df.columns) > 1 else 1
+                    st.session_state['viz_y_col'] = cols[default_y_idx]
+                
+                if st.session_state.get('viz_y_col') not in cols:
+                    st.session_state['viz_y_col'] = 'None'
+                
+                y_col = st.selectbox(
+                    "Y-Axis (or Value)", 
+                    options=cols,
+                    format_func=_column_label,
+                    key="viz_y_col"
                 )
-            with col_comp3:
-                chart2_type = st.selectbox(
-                    "Second Chart Type",
-                    options=['bar', 'line', 'scatter', 'area'],
-                    index=1,
-                    key="viz_combo_chart2"
+            
+            with col4:
+                if 'viz_color_col' not in st.session_state:
+                    st.session_state['viz_color_col'] = 'None'
+                
+                if st.session_state.get('viz_color_col') not in cols:
+                    st.session_state['viz_color_col'] = 'None'
+                
+                color_col = st.selectbox(
+                    "Color/Group By (Optional)", 
+                    options=cols,
+                    format_func=_column_label,
+                    key="viz_color_col"
                 )
-            composition_params = {
-                'y2_col': y2_col,
-                'chart1_type': chart1_type,
-                'chart2_type': chart2_type
-            }
+            
+            # Heatmap-specific multi-column selector
+            heatmap_columns = None
+            if chart_type == 'heatmap':
+                st.markdown("---")
+                st.subheader("🔥 Heatmap Column Selection")
+                st.markdown("**Select multiple columns for correlation matrix or pivot table**")
+                if 'viz_heatmap_cols' not in st.session_state:
+                    st.session_state['viz_heatmap_cols'] = []
+                available_cols = [col for col in df.columns.tolist() if col in df.columns]
+                current_selection = [col for col in st.session_state.get('viz_heatmap_cols', []) if col in available_cols]
+                selected_heatmap_cols = st.multiselect(
+                    "Select Columns for Heatmap",
+                    options=available_cols,
+                    default=current_selection,
+                    help="Select 2+ columns. Numeric columns will create correlation matrix.",
+                    key="viz_heatmap_cols"
+                )
+                heatmap_columns = selected_heatmap_cols
+                if len(selected_heatmap_cols) > 0:
+                    numeric_count = sum(1 for col in selected_heatmap_cols if pd.api.types.is_numeric_dtype(df[col]))
+                    categorical_count = len(selected_heatmap_cols) - numeric_count
+                    if len(selected_heatmap_cols) < 2:
+                        st.warning("⚠️ Please select at least 2 columns for heatmap")
+                    elif numeric_count == len(selected_heatmap_cols):
+                        st.info(f"✅ {numeric_count} numeric columns → correlation matrix")
+                    elif numeric_count >= 1 and categorical_count >= 1:
+                        st.info(f"✅ Pivot table")
+                    else:
+                        st.warning("⚠️ Need at least 1 numeric column for heatmap")
+                else:
+                    st.caption("💡 Select 2+ columns above.")
+            
+            col_agg1, col_agg2 = st.columns([1, 3])
+            with col_agg1:
+                if y_col != 'None' and y_col in df.columns and pd.api.types.is_numeric_dtype(df[y_col]):
+                    agg_options = ['none', 'sum', 'mean', 'count', 'min', 'max']
+                    agg_func = st.selectbox("Aggregate Y By", options=agg_options, index=0, key="viz_agg")
+                else:
+                    agg_func = 'none'
+                    st.caption("Aggregation\n(requires numeric Y)")
+            with col_agg2:
+                st.caption("💡 Tip: Select columns above to generate chart instantly")
+            st.markdown("---")
+            style_col1, style_col2 = st.columns([2, 2])
+            with style_col1:
+                chart_title = st.text_input(
+                    "Chart Title (optional)",
+                    placeholder="e.g., Revenue by Region",
+                    key="viz_title"
+                )
+            with style_col2:
+                palette_options = {
+                    "Default": None,
+                    "Vibrant": px.colors.qualitative.Bold,
+                    "Pastel": px.colors.qualitative.Pastel,
+                    "Prism": px.colors.qualitative.Prism,
+                    "Dark24": px.colors.qualitative.Dark24
+                }
+                palette_choice = st.selectbox(
+                    "Color Palette",
+                    options=list(palette_options.keys()),
+                    key="viz_palette"
+                )
+                color_palette = palette_options.get(palette_choice)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Composition-specific controls
+        composition_params = {}
+        if chart_mode != 'basic':
+            if 'viz_composition_params' not in st.session_state:
+                st.session_state['viz_composition_params'] = {}
+            st.markdown("---")
+            st.subheader("🎨 Composition Settings")
+            if chart_mode == 'combo':
+                col_comp1, col_comp2, col_comp3 = st.columns(3)
+                with col_comp1:
+                    y2_col = st.selectbox(
+                        "Second Y-Axis Column",
+                        options=cols,
+                        key="viz_y2_col",
+                        help="Second metric for right y-axis"
+                    )
+                with col_comp2:
+                    chart1_type = st.selectbox(
+                        "First Chart Type",
+                        options=['bar', 'line', 'scatter', 'area'],
+                        index=0,
+                        key="viz_combo_chart1"
+                    )
+                with col_comp3:
+                    chart2_type = st.selectbox(
+                        "Second Chart Type",
+                        options=['bar', 'line', 'scatter', 'area'],
+                        index=1,
+                        key="viz_combo_chart2"
+                    )
+                composition_params = {
+                    'y2_col': y2_col,
+                    'chart1_type': chart1_type,
+                    'chart2_type': chart2_type
+                }
     
-    # Main area: Render chart
+    # Main area: Render chart (right column)
     # Check if we have valid column selections based on chart mode
     can_render = False
     validation_message = None
@@ -871,172 +852,157 @@ def render_visualization_tab():
             else:
                 validation_message = "⚠️ Please select at least one column (X or Y)."
     
-    if validation_message:
-        st.warning(validation_message)
-    
-    if can_render:
-        with st.spinner("Generating chart..."):
-            # Generate chart based on mode
-            if chart_mode == 'basic':
-                fig = generate_chart(
-                    df, 
-                    chart_type, 
-                    x_col if x_col != 'None' else None,
-                    y_col if y_col != 'None' else None, 
-                    agg_func,
-                    color_col if color_col != 'None' else None,
-                    heatmap_columns if chart_type == 'heatmap' else None,
-                    chart_title if chart_title else None,
-                    color_palette
-                )
-            elif chart_mode == 'combo':
-                fig = generate_combo_chart(
-                    df,
-                    x_col if x_col != 'None' else None,
-                    y_col if y_col != 'None' else None,
-                    composition_params.get('y2_col') if composition_params.get('y2_col') != 'None' else None,
-                    composition_params.get('chart1_type', 'bar'),
-                    composition_params.get('chart2_type', 'line'),
-                    color_col if color_col != 'None' else None
-                )
-            elif chart_mode in ['small_multiples', 'faceted', 'layered']:
-                # These chart types are no longer supported - fallback to basic chart
-                st.warning(f"Chart mode '{chart_mode}' is no longer supported. Using basic chart instead.")
-                fig = generate_chart(
-                    df, 
-                    chart_type, 
-                    x_col if x_col != 'None' else None,
-                    y_col if y_col != 'None' else None, 
-                    agg_func,
-                    color_col if color_col != 'None' else None,
-                    None,
-                    chart_title if chart_title else None,
-                    color_palette
-                )
-            else:
-                # Fallback to basic chart
-                fig = generate_chart(
-                    df, 
-                    chart_type, 
-                    x_col if x_col != 'None' else None,
-                    y_col if y_col != 'None' else None, 
-                    agg_func,
-                    color_col if color_col != 'None' else None,
-                    None,
-                    chart_title if chart_title else None,
-                    color_palette
-                )
+    with viz_right_col:
+        if validation_message:
+            st.warning(validation_message)
         
-        # Display interactive Plotly chart
-        st.plotly_chart(fig, width='stretch', theme="streamlit")
-        
-        # Pin to Dashboard button
-        col_pin1, col_pin2 = st.columns([1, 4])
-        with col_pin1:
-            if st.button("📌 Pin to Dashboard", key="pin_chart_button", type="secondary", help="Save this chart to your dashboard"):
-                # Get current chart configuration
-                chart_config = _default_dashboard_builder.get_chart_config(
-                    chart_mode,
-                    chart_type,
-                    x_col,
-                    y_col,
-                    agg_func,
-                    color_col,
-                    composition_params,
-                    heatmap_columns if chart_type == 'heatmap' else None
-                )
-                
-                # Pin chart
-                if _default_dashboard_builder.pin_chart(chart_config):
-                    st.success("✅ Chart pinned to dashboard!")
-                    st.info("💡 Enable Dashboard Mode to view your pinned charts.")
+        # Chart preview card
+        st.markdown('<div class="card-elevated" role="region">', unsafe_allow_html=True)
+        if can_render:
+            with st.spinner("Generating chart..."):
+                # Generate chart based on mode
+                if chart_mode == 'basic':
+                    fig = generate_chart(
+                        df, 
+                        chart_type, 
+                        x_col if x_col != 'None' else None,
+                        y_col if y_col != 'None' else None, 
+                        agg_func,
+                        color_col if color_col != 'None' else None,
+                        heatmap_columns if chart_type == 'heatmap' else None,
+                        chart_title if chart_title else None,
+                        color_palette
+                    )
+                elif chart_mode == 'combo':
+                    fig = generate_combo_chart(
+                        df,
+                        x_col if x_col != 'None' else None,
+                        y_col if y_col != 'None' else None,
+                        composition_params.get('y2_col') if composition_params.get('y2_col') != 'None' else None,
+                        composition_params.get('chart1_type', 'bar'),
+                        composition_params.get('chart2_type', 'line'),
+                        color_col if color_col != 'None' else None
+                    )
+                elif chart_mode in ['small_multiples', 'faceted', 'layered']:
+                    st.warning(f"Chart mode '{chart_mode}' is no longer supported. Using basic chart instead.")
+                    fig = generate_chart(
+                        df, chart_type,
+                        x_col if x_col != 'None' else None,
+                        y_col if y_col != 'None' else None,
+                        agg_func,
+                        color_col if color_col != 'None' else None,
+                        None, chart_title if chart_title else None, color_palette
+                    )
                 else:
-                    st.error("❌ Failed to pin chart.")
-        with col_pin2:
-            pinned_count = len(st.session_state.get('dashboard_charts', []))
-            if pinned_count > 0:
-                st.caption(f"📊 {pinned_count} chart(s) pinned")
-        
-        # Data table below chart (optional toggle)
-        if st.checkbox("Show Raw Data Preview", key="viz_table"):
-            render_advanced_table(df, key_prefix=f"viz_raw_{selected_table}", height=320, page_size_default=25)
-        
-        # One-click Exports
-        st.divider()
-        st.subheader("📥 Export Chart")
-        st.caption("Download the current chart in PNG, SVG, or HTML formats.")
-        col1, col2, col3 = st.columns(3)
-        
-        # Determine chart name for export
-        export_chart_name = chart_mode if chart_mode != 'basic' else chart_type
-        
-        with col1:
-            try:
-                # Adjust height for composition charts
-                export_height = 800
-                img_bytes = fig.to_image(format="png", width=1200, height=export_height)
-                st.download_button(
-                    "📥 Download PNG", 
-                    img_bytes, 
-                    f"chart_{export_chart_name}_{selected_table}.png", 
-                    "image/png",
-                    key="download_png",
-                    width='stretch'
-                )
-            except Exception as e:
-                st.error(f"PNG export failed: {e}")
-                st.caption("💡 Install kaleido: `pip install kaleido`")
-        
-        with col2:
-            try:
-                export_height = 800
-                svg_bytes = fig.to_image(format="svg", width=1200, height=export_height)
-                st.download_button(
-                    "📐 Download SVG", 
-                    svg_bytes, 
-                    f"chart_{export_chart_name}_{selected_table}.svg", 
-                    "image/svg+xml",
-                    key="download_svg",
-                    width='stretch'
-                )
-            except Exception as e:
-                st.error(f"SVG export failed: {e}")
-                st.caption("💡 Install kaleido: `pip install kaleido`")
-        
-        with col3:
-            try:
-                html_str = fig.to_html(full_html=False)
-                st.download_button(
-                    "🌐 Download HTML", 
-                    html_str.encode(), 
-                    f"chart_{export_chart_name}_{selected_table}.html", 
-                    "text/html",
-                    key="download_html",
-                    width='stretch'
-                )
-            except Exception as e:
-                st.error(f"HTML export failed: {e}")
-
-        st.markdown("---")
-        st.subheader("📦 Export More Formats")
-        st.caption("Generate reports and reusable code for your chart.")
-        e1, e2, e3 = st.columns(3)
-        with e1:
-            try:
-                pdf_bytes = fig.to_image(format="pdf", width=1200, height=export_height)
-                st.download_button(
-                    "📄 Download PDF",
-                    pdf_bytes,
-                    f"chart_{export_chart_name}_{selected_table}.pdf",
-                    "application/pdf",
-                    key="download_pdf",
-                    width='stretch'
-                )
-            except Exception as e:
-                st.error(f"PDF export failed: {e}")
-                st.caption("💡 Install kaleido: `pip install kaleido`")
-        with e2:
-            python_script = f"""import pandas as pd
+                    fig = generate_chart(
+                        df, chart_type,
+                        x_col if x_col != 'None' else None,
+                        y_col if y_col != 'None' else None,
+                        agg_func,
+                        color_col if color_col != 'None' else None,
+                        None, chart_title if chart_title else None, color_palette
+                    )
+            
+            # Display interactive Plotly chart
+            st.plotly_chart(fig, width='stretch', theme="streamlit")
+            
+            # Pin to Dashboard button
+            col_pin1, col_pin2 = st.columns([1, 4])
+            with col_pin1:
+                if st.button("📌 Pin to Dashboard", key="pin_chart_button", type="secondary", help="Save this chart to your dashboard"):
+                    chart_config = _default_dashboard_builder.get_chart_config(
+                        chart_mode,
+                        chart_type,
+                        x_col,
+                        y_col,
+                        agg_func,
+                        color_col,
+                        composition_params,
+                        heatmap_columns if chart_type == 'heatmap' else None
+                    )
+                    if _default_dashboard_builder.pin_chart(chart_config):
+                        st.success("✅ Chart pinned to dashboard!")
+                        st.info("💡 Enable Dashboard Mode to view your pinned charts.")
+                    else:
+                        st.error("❌ Failed to pin chart.")
+            with col_pin2:
+                pinned_count = len(st.session_state.get('dashboard_charts', []))
+                if pinned_count > 0:
+                    st.caption(f"📊 {pinned_count} chart(s) pinned")
+            
+            if st.checkbox("Show Raw Data Preview", key="viz_table"):
+                render_advanced_table(df, key_prefix=f"viz_raw_{selected_table}", height=320, page_size_default=25)
+            
+            st.divider()
+            st.subheader("📥 Export Chart")
+            st.caption("Download the current chart in PNG, SVG, or HTML formats.")
+            col1, col2, col3 = st.columns(3)
+            export_chart_name = chart_mode if chart_mode != 'basic' else chart_type
+            with col1:
+                try:
+                    export_height = 800
+                    img_bytes = fig.to_image(format="png", width=1200, height=export_height)
+                    st.download_button(
+                        "📥 Download PNG", 
+                        img_bytes, 
+                        f"chart_{export_chart_name}_{selected_table}.png", 
+                        "image/png",
+                        key="download_png",
+                        width='stretch'
+                    )
+                except Exception as e:
+                    st.error(f"PNG export failed: {e}")
+                    st.caption("💡 Install kaleido: `pip install kaleido`")
+            
+            with col2:
+                try:
+                    export_height = 800
+                    svg_bytes = fig.to_image(format="svg", width=1200, height=export_height)
+                    st.download_button(
+                        "📐 Download SVG", 
+                        svg_bytes, 
+                        f"chart_{export_chart_name}_{selected_table}.svg", 
+                        "image/svg+xml",
+                        key="download_svg",
+                        width='stretch'
+                    )
+                except Exception as e:
+                    st.error(f"SVG export failed: {e}")
+                    st.caption("💡 Install kaleido: `pip install kaleido`")
+            
+            with col3:
+                try:
+                    html_str = fig.to_html(full_html=False)
+                    st.download_button(
+                        "🌐 Download HTML", 
+                        html_str.encode(), 
+                        f"chart_{export_chart_name}_{selected_table}.html", 
+                        "text/html",
+                        key="download_html",
+                        width='stretch'
+                    )
+                except Exception as e:
+                    st.error(f"HTML export failed: {e}")
+            st.markdown("---")
+            st.subheader("📦 Export More Formats")
+            st.caption("Generate reports and reusable code for your chart.")
+            e1, e2, e3 = st.columns(3)
+            with e1:
+                try:
+                    pdf_bytes = fig.to_image(format="pdf", width=1200, height=export_height)
+                    st.download_button(
+                        "📄 Download PDF",
+                        pdf_bytes,
+                        f"chart_{export_chart_name}_{selected_table}.pdf",
+                        "application/pdf",
+                        key="download_pdf",
+                        width='stretch'
+                    )
+                except Exception as e:
+                    st.error(f"PDF export failed: {e}")
+                    st.caption("💡 Install kaleido: `pip install kaleido`")
+            with e2:
+                python_script = f"""import pandas as pd
 import plotly.express as px
 
 # Load your data
@@ -1051,16 +1017,16 @@ fig = px.{chart_type}(
 )
 fig.show()
 """
-            st.download_button(
-                "🐍 Download Python",
-                python_script.encode(),
-                f"chart_{export_chart_name}_{selected_table}.py",
-                "text/x-python",
-                key="download_python",
-                width='stretch'
-            )
-        with e3:
-            notebook = {
+                st.download_button(
+                    "🐍 Download Python",
+                    python_script.encode(),
+                    f"chart_{export_chart_name}_{selected_table}.py",
+                    "text/x-python",
+                    key="download_python",
+                    width='stretch'
+                )
+            with e3:
+                notebook = {
                 "cells": [
                     {
                         "cell_type": "markdown",
@@ -1105,57 +1071,54 @@ fig.show()
                 },
                 "nbformat": 4,
                 "nbformat_minor": 5
-            }
-            st.download_button(
-                "📓 Download Notebook",
-                json.dumps(notebook, indent=2).encode(),
-                f"chart_{export_chart_name}_{selected_table}.ipynb",
-                "application/json",
-                key="download_notebook",
-                width='stretch'
-            )
-
-        ppt_col, _, _ = st.columns(3)
-        with ppt_col:
-            try:
-                from pptx import Presentation
-                img_bytes = fig.to_image(format="png", width=1200, height=export_height)
-                prs = Presentation()
-                slide_layout = prs.slide_layouts[5]
-                slide = prs.slides.add_slide(slide_layout)
-                image_stream = io.BytesIO(img_bytes)
-                slide.shapes.add_picture(image_stream, left=0, top=0, width=prs.slide_width)
-                pptx_stream = io.BytesIO()
-                prs.save(pptx_stream)
+                }
                 st.download_button(
-                    "📊 Download PowerPoint",
-                    pptx_stream.getvalue(),
-                    f"chart_{export_chart_name}_{selected_table}.pptx",
-                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    key="download_pptx",
+                    "📓 Download Notebook",
+                    json.dumps(notebook, indent=2).encode(),
+                    f"chart_{export_chart_name}_{selected_table}.ipynb",
+                    "application/json",
+                    key="download_notebook",
                     width='stretch'
                 )
-            except ImportError:
-                st.caption("💡 Install python-pptx: `pip install python-pptx`")
-            except Exception as e:
-                st.error(f"PowerPoint export failed: {e}")
-    
-    elif not validation_message:
-        # No columns selected and no validation message
-        st.info("👆 Select at least one column to get started. Try selecting a column for X or Y axis!")
+            ppt_col, _, _ = st.columns(3)
+            with ppt_col:
+                try:
+                    from pptx import Presentation
+                    img_bytes = fig.to_image(format="png", width=1200, height=export_height)
+                    prs = Presentation()
+                    slide_layout = prs.slide_layouts[5]
+                    slide = prs.slides.add_slide(slide_layout)
+                    image_stream = io.BytesIO(img_bytes)
+                    slide.shapes.add_picture(image_stream, left=0, top=0, width=prs.slide_width)
+                    pptx_stream = io.BytesIO()
+                    prs.save(pptx_stream)
+                    st.download_button(
+                        "📊 Download PowerPoint",
+                        pptx_stream.getvalue(),
+                        f"chart_{export_chart_name}_{selected_table}.pptx",
+                        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        key="download_pptx",
+                        width='stretch'
+                    )
+                except ImportError:
+                    st.caption("💡 Install python-pptx: `pip install python-pptx`")
+                except Exception as e:
+                    st.error(f"PowerPoint export failed: {e}")
         
-        # Show column suggestions
-        numeric_cols = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col])]
-        categorical_cols = [col for col in df.columns if not pd.api.types.is_numeric_dtype(df[col])]
+        elif not validation_message:
+            st.info("👆 Select at least one column to get started. Try selecting a column for X or Y axis!")
+            numeric_cols = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col])]
+            categorical_cols = [col for col in df.columns if not pd.api.types.is_numeric_dtype(df[col])]
+            if numeric_cols or categorical_cols:
+                with st.expander("💡 Quick Start Suggestions", expanded=False):
+                    if categorical_cols:
+                        st.write(f"**For X-Axis (Category):** Try `{categorical_cols[0]}`")
+                    if numeric_cols:
+                        st.write(f"**For Y-Axis (Value):** Try `{numeric_cols[0]}`")
+                    if len(categorical_cols) > 0 and len(numeric_cols) > 0:
+                        st.write(f"**Example:** X=`{categorical_cols[0]}`, Y=`{numeric_cols[0]}`, Chart=`Bar`")
         
-        if numeric_cols or categorical_cols:
-            with st.expander("💡 Quick Start Suggestions", expanded=False):
-                if categorical_cols:
-                    st.write(f"**For X-Axis (Category):** Try `{categorical_cols[0]}`")
-                if numeric_cols:
-                    st.write(f"**For Y-Axis (Value):** Try `{numeric_cols[0]}`")
-                if len(categorical_cols) > 0 and len(numeric_cols) > 0:
-                    st.write(f"**Example:** X=`{categorical_cols[0]}`, Y=`{numeric_cols[0]}`, Chart=`Bar`")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     # Dashboard View Section
     st.divider()
