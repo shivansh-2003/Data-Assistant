@@ -56,6 +56,8 @@ Defined in `state.py` as a `TypedDict`. DataFrames are not stored in state; they
 | `intent` | Router output: data_query, visualization_request, small_talk, report, summarize_last. |
 | `entities` | Extracted columns, operations, aggregations. |
 | `tool_calls` | Selected tools and parameters from the analyzer. |
+| `plan` | Multi-step plan: list of dicts with step, description, code, output_var. |
+| `needs_planning` | True if query requires multi-step reasoning. |
 | `effective_query` | Resolved full question (e.g. after context resolution or clarify). |
 | `conversation_context` | last_columns, last_aggregation, last_group_by, active_filters, current_topic, last_query. |
 | `needs_clarification` | True when multiple columns match one user mention. |
@@ -74,7 +76,8 @@ Defined in `state.py` as a `TypedDict`. DataFrames are not stored in state; they
 - **Entry:** `router`.
 - **Router →** `clarification` (if needs_clarification), `responder` (small_talk), `insight` (summarize_last), or `analyzer`.
 - **Clarification →** `END` (no tools this turn).
-- **Analyzer →** `insight`, `viz`, or `responder` (depending on tool selection).
+- **Analyzer →** `planner` (if insight tool selected), `viz`, or `responder`.
+- **Planner →** `insight` (always; creates multi-step plan for complex queries).
 - **Insight →** `viz` (if viz tools in tool_calls) or `responder`.
 - **Viz →** `responder`.
 - **Responder →** `suggestion` → `END`.
@@ -88,14 +91,15 @@ flowchart TD
     C -->|summarize_last| F[Insight]
     C -->|data / viz / report| G[Analyzer]
     G --> H{route_after_analyzer}
-    G --> I[Insight]
-    G --> J[Viz]
-    G --> K[Responder]
-    I --> L{viz in tool_calls?}
-    L -->|Yes| M[Viz]
-    L -->|No| E
-    M --> E
-    E --> N[Suggestion]
+    H -->|insight_tool| I[Planner]
+    H -->|viz only| J[Viz]
+    H -->|no tools| K[Responder]
+    I --> L[Insight]
+    L --> M{viz in tool_calls?}
+    M -->|Yes| J
+    M -->|No| K
+    J --> K
+    K --> N[Suggestion]
     N --> O[END]
 ```
 
@@ -107,13 +111,42 @@ flowchart TD
 |------|------|----------------|
 | **Router** | `nodes/router.py` | Classify intent (data_query, visualization_request, small_talk, report, summarize_last). Set `is_follow_up` and resolve context: if follow-up, call context_resolver to produce `effective_query`. Detect ambiguous column mentions and set `needs_clarification` + `clarification_options`. |
 | **Clarification** | `nodes/clarification.py` | When multiple columns match one mention, emit an assistant message asking the user to choose (e.g. “Did you mean: ColA or ColB?”). On next turn, router/insight use `clarification_resolved` to substitute the chosen column into the query. |
-| **Analyzer** | `nodes/analyzer.py` | Select tools and parameters from the query (and schema). Output `tool_calls`. Route to insight, viz, or responder via `route_after_analyzer`. |
-| **Insight** | `nodes/insight.py` | Use `effective_query` (or clarified query). Call code_generator to produce pandas code; run it in safe_executor. Handle summarize_last (re-summarize previous result). Map result to `last_insight`, `insight_data`, `one_line_insight`, `generated_code`. On executor/column errors, set `error` and optional `error_suggestion` (e.g. did_you_mean). |
+| **Analyzer** | `nodes/analyzer.py` | Select tools and parameters from the query (and schema). Output `tool_calls`. Route to planner (if insight_tool), viz, or responder. |
+| **Planner** | `nodes/planner.py` | Break down complex queries into multi-step plans. Detects complexity (YoY, multiple operations, sequential steps). Creates plan with step descriptions and code. For simple queries, returns single-step plan. |
+| **Insight** | `nodes/insight.py` | Use `effective_query` (or clarified query). Try rule-based execution first (for simple queries). If `plan` exists, execute plan steps sequentially. Otherwise, call code_generator to produce pandas code. Run in safe_executor (with validation, row limits, profiling). Handle summarize_last. Map result to `last_insight`, `insight_data`, `one_line_insight`, `generated_code`. On executor/column errors, set `error` and optional `error_suggestion`. |
 | **Viz** | `nodes/viz.py` | Read `tool_calls` for chart tools; validate and build config. Call `data_visualization` to generate Plotly figure. Set `viz_config`, `viz_type`, `chart_reason`; on failure set `viz_error` (e.g. too many categories). |
 | **Responder** | `nodes/responder.py` | Format final assistant message from intent, `last_insight`, `viz_config`, `viz_error`, `insight_data`. Handle small_talk, did_you_mean, and generic errors. Append AIMessage to `messages` and append current turn’s snapshot to `response_snapshots` (viz_config, insight_data, generated_code, viz_error). |
 | **Suggestion** | `nodes/suggestion_engine.py` | Generate three follow-up questions from last query, insight summary, and schema; set `suggestions` for the UI chips. |
 
 ---
+
+## Data Profiling Layer
+
+Comprehensive data profiling runs automatically before any query:
+
+- **Missing Value %**: Percentage of null values per column
+- **Cardinality**: Low (<10), Medium (10-100), High (>100) unique values
+- **Numeric Distribution**: Mean, median, std, min, max, quartiles for numeric columns
+- **Category Counts**: Top 10 most frequent values for categorical columns
+
+Profiles are:
+- **Injected into prompts** for better tool selection and code generation
+- **Used for chart validation** to prevent unsuitable visualizations
+- **Used for smart chart selection** based on data characteristics
+
+See `DATA_PROFILING.md` for detailed documentation.
+
+## Code Execution Guardrails
+
+InsightBot includes comprehensive guardrails for safe code execution:
+
+1. **Code Validation**: Blocks forbidden operations (`.plot()`, file writes, `eval()`, etc.)
+2. **Result Variable Enforcement**: Ensures code assigns to `result` variable
+3. **Row Limit Enforcement**: Truncates results to max 100k rows
+4. **Execution Time Profiling**: Tracks execution time for monitoring
+5. **Rule-Based Fallback**: Handles simple queries (mean, sum, count, max, min) without LLM
+
+See `execution/GUARDRAILS.md` for detailed documentation.
 
 ## Tools
 
@@ -172,7 +205,8 @@ chatbot/
 │   ├── router.py         # Intent, context resolution, clarification detection
 │   ├── clarification.py  # "Did you mean X or Y?" message
 │   ├── analyzer.py       # Tool selection, route_after_analyzer
-│   ├── insight.py        # Code gen + safe execution + summarization
+│   ├── planner.py        # Multi-step query breakdown
+│   ├── insight.py        # Code gen + safe execution + summarization (uses plan if available)
 │   ├── viz.py            # Chart config + data_visualization integration
 │   ├── responder.py      # Format response, append message, append snapshot
 │   └── suggestion_engine.py  # Follow-up suggestions
@@ -194,7 +228,9 @@ chatbot/
 │
 └── utils/
     ├── __init__.py
-    └── session_loader.py # Redis load, prepare_state_dataframes
+    ├── session_loader.py      # Redis load, prepare_state_dataframes, get_session_profile
+    ├── profile_formatter.py   # Format profile for prompts, chart validation
+    └── chart_selector.py       # Smart chart selection based on data characteristics
 ```
 
 ---

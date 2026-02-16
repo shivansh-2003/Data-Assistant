@@ -1,7 +1,7 @@
 """Analyzer node for tool selection."""
 
 import logging
-from typing import Dict
+from typing import Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 import os
@@ -9,10 +9,17 @@ from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
 
-from ..prompts import PROMPTS
+from ..constants import INTENT_SMALL_TALK, TOOL_INSIGHT, VIZ_TOOL_NAMES
+from ..prompts import get_analyzer_prompt
 from ..tools import get_all_tools
+from ..utils.profile_formatter import format_profile_for_prompt
 
 logger = logging.getLogger(__name__)
+
+
+def _format_data_profile_summary(data_profile: Dict[str, Any]) -> str:
+    """Format data_profile for analyzer prompt using enhanced profiling."""
+    return format_profile_for_prompt(data_profile, max_columns=20)
 
 
 @observe(name="chatbot_analyzer", as_type="chain")
@@ -27,7 +34,7 @@ def analyzer_node(state: Dict) -> Dict:
         intent = state.get("intent", "data_query")
         
         # Small talk goes directly to responder
-        if intent == "small_talk":
+        if intent == INTENT_SMALL_TALK:
             state["tool_calls"] = []
             return state
         
@@ -38,12 +45,19 @@ def analyzer_node(state: Dict) -> Dict:
         
         schema = state.get("schema", {})
         entities = state.get("entities", {})
+        sub_intent = state.get("sub_intent", "general")
+        implicit_viz_hint = state.get("implicit_viz_hint", False)
+        data_profile = state.get("data_profile") or {}
+        data_profile_summary = _format_data_profile_summary(data_profile)
         
-        # Format prompt
-        system_prompt = PROMPTS["analyzer"].format(
+        # Format prompt using modular prompt function
+        system_prompt = get_analyzer_prompt(
             schema=schema,
             intent=intent,
-            entities=entities
+            sub_intent=sub_intent,
+            entities=entities,
+            implicit_viz_hint=implicit_viz_hint,
+            data_profile_summary=data_profile_summary,
         )
         
         # Initialize LLM with tools
@@ -77,7 +91,7 @@ def analyzer_node(state: Dict) -> Dict:
     except Exception as e:
         logger.error(f"Error in analyzer node: {e}", exc_info=True)
         # Default to insight tool for data queries
-        state["tool_calls"] = [{"name": "insight_tool", "args": {"query": query}}]
+        state["tool_calls"] = [{"name": TOOL_INSIGHT, "args": {"query": query}}]
         return state
 
 
@@ -93,13 +107,13 @@ def route_after_analyzer(state: Dict) -> str:
     intent = state.get("intent")
     tool_calls = state.get("tool_calls", [])
     
-    if intent == "small_talk" or not tool_calls:
+    if intent == INTENT_SMALL_TALK or not tool_calls:
         return "responder"
     
     tool_names = [tc.get("name", "") for tc in tool_calls]
     
-    has_insight = any("insight" in name for name in tool_names)
-    has_viz = any(name in ["bar_chart", "line_chart", "scatter_chart", "histogram", "combo_chart", "dashboard"] for name in tool_names)
+    has_insight = any(name == TOOL_INSIGHT for name in tool_names)
+    has_viz = any(name in VIZ_TOOL_NAMES for name in tool_names)
     
     if has_insight:
         return "insight"

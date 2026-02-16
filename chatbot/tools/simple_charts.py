@@ -128,3 +128,113 @@ def histogram(column: str, bins: int = 30, table_name: str = "current") -> dict:
         "table_name": table_name
     }
 
+
+@tool
+def area_chart(x_col: str, y_col: str, agg_func: str = "sum", color_col: Optional[str] = None, table_name: str = "current") -> dict:
+    """
+    Create an area chart for cumulative values and trends.
+    
+    Use for:
+    - Cumulative values over time
+    - Stacked area comparisons
+    - Trend visualization with filled areas
+    
+    Args:
+        x_col: Column name for X-axis (usually time/date)
+        y_col: Column name for Y-axis (numeric)
+        agg_func: Aggregation function (sum, mean, median, etc.)
+        color_col: Optional column for stacked areas
+        table_name: Name of the table to use
+        
+    Returns:
+        Dict with chart configuration
+    """
+    return {
+        "tool": "area_chart",
+        "chart_type": "area",
+        "x_col": x_col,
+        "y_col": y_col,
+        "agg_func": agg_func,
+        "color_col": color_col,
+        "table_name": table_name
+    }
+
+
+@tool
+def box_chart(y_col: str, x_col: Optional[str] = None, color_col: Optional[str] = None, table_name: str = "current") -> dict:
+    """
+    Create a box plot for distribution analysis and outlier detection.
+    
+    Use for:
+    - Distribution comparison across categories
+    - Outlier detection
+    - Statistical summary visualization
+    - Comparing distributions
+    
+    Args:
+        y_col: Column name for Y-axis (numeric) - REQUIRED
+        x_col: Optional categorical column for grouping
+        color_col: Optional column for color grouping
+        table_name: Name of the table to use
+        
+    Returns:
+        Dict with chart configuration
+    """
+    return {
+        "tool": "box_chart",
+        "chart_type": "box",
+        "x_col": x_col,
+        "y_col": y_col,
+        "color_col": color_col,
+        "table_name": table_name
+    }
+
+
+@tool
+def heatmap_chart(columns: list, table_name: str = "current") -> dict:
+    """
+    Create a heatmap for correlation matrices or pivot tables.
+    
+    Use for:
+    - Correlation matrix visualization
+    - Pivot table heatmaps
+    - Multi-column relationship analysis
+    
+    Args:
+        columns: List of column names (2+ required, numeric for correlation matrix)
+        table_name: Name of the table to use
+        
+    Returns:
+        Dict with chart configuration
+    """
+    return {
+        "tool": "heatmap_chart",
+        "chart_type": "heatmap",
+        "heatmap_columns": columns,
+        "table_name": table_name
+    }
+
+
+@tool
+def correlation_matrix(table_name: str = "current") -> dict:
+    """
+    Create a correlation matrix heatmap for all numeric columns.
+    
+    Use for:
+    - Quick correlation overview
+    - Finding relationships between numeric variables
+    - Data exploration
+    
+    Args:
+        table_name: Name of the table to use
+        
+    Returns:
+        Dict with chart configuration (auto-selects all numeric columns)
+    """
+    return {
+        "tool": "correlation_matrix",
+        "chart_type": "heatmap",
+        "heatmap_columns": "auto",  # Special marker for auto-selection
+        "table_name": table_name
+    }
+

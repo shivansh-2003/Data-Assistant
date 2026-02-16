@@ -9,8 +9,10 @@ from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
 
-from ..prompts import PROMPTS
+from ..constants import INTENT_SUMMARIZE_LAST, TOOL_INSIGHT
+from ..prompts import get_summarizer_prompt
 from ..execution import generate_pandas_code, execute_pandas_code
+from ..execution.rule_based_executor import try_rule_based_execution
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,7 @@ def insight_node(state: Dict) -> Dict:
         tool_calls = state.get("tool_calls", [])
         
         # Find insight tool calls
-        insight_calls = [tc for tc in tool_calls if tc.get("name") == "insight_tool"]
+        insight_calls = [tc for tc in tool_calls if tc.get("name") == TOOL_INSIGHT]
         
         if not insight_calls:
             return state
@@ -73,7 +75,7 @@ def insight_node(state: Dict) -> Dict:
         insight_query = effective_query or insight_call.get("args", {}).get("query", query)
 
         # Summarize previous result (no code run) when user said "summarize that"
-        if state.get("intent") == "summarize_last":
+        if state.get("intent") == INTENT_SUMMARIZE_LAST:
             if state.get("last_insight") or state.get("insight_data"):
                 prev = state.get("last_insight") or ""
                 if state.get("insight_data") and state["insight_data"].get("type") == "dataframe":
@@ -84,27 +86,80 @@ def insight_node(state: Dict) -> Dict:
                 state["last_insight"] = summary
                 state["one_line_insight"] = summary.split(".")[0].strip() + "." if summary else summary
                 sources = state.get("sources", [])
-                sources.append("insight_tool")
+                sources.append(TOOL_INSIGHT)
                 state["sources"] = sources
                 return state
             else:
                 state["error"] = "No previous result to summarize. Ask a question about your data first."
                 return state
         
-        # Generate pandas code
-        logger.info(f"Generating pandas code for: {insight_query[:50]}...")
-        code = generate_pandas_code(
-            query=insight_query,
-            schema=schema,
-            df_names=list(df_dict.keys())
-        )
+        # Check if plan exists (from planner node)
+        plan = state.get("plan")
         
-        # Store code in state for "Show code" in UI
-        state["generated_code"] = code
-        
-        # Execute code
-        logger.info("Executing pandas code...")
-        execution_result = execute_pandas_code(code, df_dict)
+        if plan and len(plan) > 0:
+            # Execute multi-step plan
+            logger.info(f"Executing plan with {len(plan)} step(s)...")
+            code_parts = []
+            
+            for i, step_info in enumerate(plan):
+                step_num = step_info.get("step", i + 1)
+                step_code = step_info.get("code", "").strip()
+                output_var = step_info.get("output_var", f"step{step_num}_result")
+                description = step_info.get("description", f"Step {step_num}")
+                
+                if not step_code:
+                    continue
+                
+                # Add step comment
+                code_parts.append(f"# Step {step_num}: {description}")
+                code_parts.append(step_code)
+            
+            # Combine all steps into unified code block
+            unified_code = "\n\n".join(code_parts)
+            
+            # Ensure final step stores result in 'result' variable
+            final_step = plan[-1]
+            final_output_var = final_step.get("output_var", "result")
+            if final_output_var != "result":
+                # Check if final_output_var is already assigned in the code
+                if f"{final_output_var} = " not in unified_code and f"{final_output_var}=" not in unified_code:
+                    unified_code += f"\nresult = {final_output_var}"
+                else:
+                    # Replace the final assignment with 'result'
+                    unified_code = unified_code.replace(f"{final_output_var} =", "result =", 1)
+                    unified_code = unified_code.replace(f"{final_output_var}=", "result=", 1)
+            
+            code = unified_code
+            state["generated_code"] = code
+            
+            # Execute unified code (all steps run in sequence, later steps can use earlier step variables)
+            logger.info("Executing multi-step plan...")
+            execution_result = execute_pandas_code(code, df_dict)
+        else:
+            # Try rule-based execution first (for simple queries)
+            logger.info("Checking if query can be handled by rule-based executor...")
+            rule_based_result = try_rule_based_execution(insight_query, df_dict)
+            
+            if rule_based_result and rule_based_result.get("success"):
+                # Rule-based execution succeeded
+                logger.info("Query executed using rule-based executor (no LLM needed)")
+                execution_result = rule_based_result
+                state["generated_code"] = f"# Rule-based execution\n# Query: {insight_query}\nresult = <computed by rule-based executor>"
+            else:
+                # Generate pandas code using LLM
+                logger.info(f"Generating pandas code for: {insight_query[:50]}...")
+                code = generate_pandas_code(
+                    query=insight_query,
+                    schema=schema,
+                    df_names=list(df_dict.keys())
+                )
+                
+                # Store code in state for "Show code" in UI
+                state["generated_code"] = code
+                
+                # Execute code
+                logger.info("Executing pandas code...")
+                execution_result = execute_pandas_code(code, df_dict)
         
         if not execution_result["success"]:
             state["error"] = execution_result.get("error", "Analysis failed")
@@ -158,7 +213,7 @@ def insight_node(state: Dict) -> Dict:
         
         # Add to sources
         sources = state.get("sources", [])
-        sources.append("insight_tool")
+        sources.append(TOOL_INSIGHT)
         state["sources"] = sources
         
         # Update conversation context for follow-up resolution next turn
@@ -199,8 +254,8 @@ def summarize_insight(query: str, output: any) -> str:
         if len(output_str) > 1000:
             output_str = output_str[:1000] + "..."
         
-        # Format prompt
-        system_prompt = PROMPTS["summarizer"].format(
+        # Format prompt using modular prompt function
+        system_prompt = get_summarizer_prompt(
             query=query,
             output=output_str
         )

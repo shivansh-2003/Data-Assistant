@@ -9,9 +9,27 @@ from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
 
-from ..prompts import PROMPTS
+from ..constants import INTENT_DATA_QUERY, INTENT_SMALL_TALK
+from ..prompts import get_small_talk_prompt, get_responder_prompt
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_tone(response_text: str, state: Dict) -> str:
+    """Adjust response text based on user_tone (technical, executive, explorer)."""
+    tone = (state.get("user_tone") or "explorer").lower().strip()
+    if tone == "technical" and state.get("generated_code"):
+        if "expander" not in response_text.lower() and "code" not in response_text.lower():
+            response_text = response_text.rstrip() + "\n\nYou can see how this was computed in the expander below."
+    elif tone == "executive":
+        # Keep to first 1–2 sentences for executive brevity
+        sentences = [s.strip() for s in response_text.replace("\n\n", ". ").split(". ") if s.strip()]
+        if len(sentences) > 2:
+            response_text = ". ".join(sentences[:2]) + ("." if not sentences[0].endswith(".") else "")
+    elif tone == "explorer" and state.get("last_insight") and not state.get("error"):
+        if "?" not in response_text[-50:] and len(response_text) < 400:
+            response_text = response_text.rstrip() + " Want to dig into a specific segment or compare something?"
+    return response_text
 
 
 @observe(name="chatbot_responder", as_type="chain")
@@ -27,12 +45,12 @@ def responder_node(state: Dict) -> Dict:
     """
     try:
         update_trace_context(session_id=state.get("session_id"), metadata={"node": "responder"})
-        intent = state.get("intent", "data_query")
+        intent = state.get("intent", INTENT_DATA_QUERY)
         messages = state.get("messages", [])
         last_message = messages[-1]
         query = last_message.content if hasattr(last_message, 'content') else str(last_message)
         
-        if intent == "small_talk":
+        if intent == INTENT_SMALL_TALK:
             response_text = generate_small_talk_response(query)
         # Handle "did you mean" column suggestion
         elif state.get("error_suggestion") and state["error_suggestion"].get("type") == "did_you_mean":
@@ -55,7 +73,7 @@ def responder_node(state: Dict) -> Dict:
             
             chart_reason = state.get("chart_reason")
             viz_error = state.get("viz_error")
-            intent = state.get("intent", "data_query")
+            intent = state.get("intent", INTENT_DATA_QUERY)
             format_hint = ""
             if state.get("insight_data") and not has_viz:
                 format_hint = "Here's the table.\n\n"
@@ -93,6 +111,9 @@ def responder_node(state: Dict) -> Dict:
                 # No insight or viz - generate generic response
                 response_text = format_fallback_response(query, state)
         
+        # Tone adaptation: adjust response style based on user_tone
+        response_text = _apply_tone(response_text, state)
+        
         # Add response to messages
         state["messages"].append(AIMessage(content=response_text))
 
@@ -129,7 +150,7 @@ def generate_small_talk_response(query: str) -> str:
         )
         
         response = llm.invoke([
-            SystemMessage(content=PROMPTS["small_talk"]),
+            SystemMessage(content=get_small_talk_prompt()),
             HumanMessage(content=query)
         ])
         
@@ -151,6 +172,7 @@ def format_fallback_response(query: str, state: Dict) -> str:
         
         schema = state.get("schema", {})
         
+        system_content = get_responder_prompt(query=query, insights="No analysis yet.", has_viz=False)
         prompt = f"""The user asked: {query}
 
 Session data schema: {schema}
@@ -158,7 +180,7 @@ Session data schema: {schema}
 Generate a helpful response acknowledging their question and suggesting how you could help analyze their data."""
         
         response = llm.invoke([
-            SystemMessage(content=PROMPTS["responder"]),
+            SystemMessage(content=system_content),
             HumanMessage(content=prompt)
         ])
         

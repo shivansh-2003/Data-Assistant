@@ -6,7 +6,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 import os
 from typing import Dict, Any
 
-from ..prompts import PROMPTS
+from ..prompts import get_code_generator_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +24,8 @@ def generate_pandas_code(query: str, schema: Dict[str, Any], df_names: list) -> 
         Executable pandas code string
     """
     try:
-        # Format prompt
-        system_prompt = PROMPTS["code_generator"].format(
+        # Format prompt using modular prompt function
+        system_prompt = get_code_generator_prompt(
             df_names=df_names,
             schema=schema,
             query=query

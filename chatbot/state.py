@@ -1,8 +1,11 @@
 """State schema for InsightBot LangGraph implementation."""
 
-from typing import TypedDict, Annotated, List, Dict, Optional, Any
+from typing import TypedDict, Annotated, List, Dict, Optional, Any, Callable
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
+
+# Formal contract for graph nodes: accept state dict, return updated state dict
+Node = Callable[[Dict[str, Any]], Dict[str, Any]]
 
 
 class State(TypedDict):
@@ -22,11 +25,16 @@ class State(TypedDict):
     schema: Dict[str, Any]
     operation_history: List[Dict[str, Any]]
     table_names: List[str]  # List of available table names
+    data_profile: Optional[Dict[str, Any]]  # Per-table/column: dtype, n_unique, n_null for analyzer/viz
     
     # Query processing
     intent: Optional[str]  # "data_query", "visualization_request", "small_talk"
+    sub_intent: Optional[str]  # compare, trend, correlate, segment, distribution, filter, report, general
+    implicit_viz_hint: Optional[bool]  # True for exploratory queries where a chart is appropriate
     entities: Optional[Dict[str, Any]]  # Extracted entities (columns, operations)
     tool_calls: Optional[List[Dict[str, Any]]]  # Tools to execute
+    plan: Optional[List[Dict[str, Any]]]  # Multi-step plan: [{"step": 1, "description": "...", "code": "..."}, ...]
+    needs_planning: Optional[bool]  # True if query requires multi-step reasoning
     effective_query: Optional[str]  # Resolved query when follow-up (e.g. "What about max?" -> "Show max revenue by region")
     conversation_context: Optional[Dict[str, Any]]  # last_columns, last_aggregation, last_group_by, active_filters, current_topic, last_query
     needs_clarification: Optional[bool]  # True when multiple columns match one mention
@@ -51,6 +59,7 @@ class State(TypedDict):
     viz_error: Optional[str]  # When chart generation fails (e.g. "Too many categories")
     
     # Response metadata
+    user_tone: Optional[str]  # "technical", "executive", "explorer" for response style
     sources: Optional[List[str]]  # Tools used
     suggestions: Optional[List[str]]  # 3 contextual follow-up questions (for UI chips)
     # Per-turn snapshots so the UI can show chart/table/code for each AI message (not just the latest)

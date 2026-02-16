@@ -81,6 +81,109 @@ class SessionLoader:
             self.logger.warning(f"Could not load full dataframes via API: {e}")
             return self.load_session_dataframes(session_id)
     
+    def get_session_profile(self, session_id: str) -> Dict[str, Any]:
+        """
+        Compute comprehensive data profile (per-table, per-column stats) for tool selection and validation.
+        
+        Returns structure:
+        {
+            "tables": {
+                table_name: {
+                    "columns": {
+                        col_name: {
+                            "dtype": str,
+                            "n_unique": int,
+                            "n_null": int,
+                            "missing_pct": float,
+                            "cardinality": str,  # "low" (<10), "medium" (10-100), "high" (>100)
+                            "is_numeric": bool,
+                            "is_categorical": bool,
+                            "numeric_stats": {...},  # if numeric: mean, median, std, min, max, q25, q75
+                            "top_categories": {...}  # if categorical: top 10 value counts
+                        }
+                    }
+                }
+            }
+        }
+        """
+        try:
+            tables = self.store.load_session(session_id)
+            if not tables:
+                return {"tables": {}}
+            
+            profile = {"tables": {}}
+            
+            for table_name, df in tables.items():
+                if not isinstance(df, pd.DataFrame) or df.empty:
+                    continue
+                
+                profile["tables"][table_name] = {"columns": {}}
+                total_rows = len(df)
+                
+                for col in df.columns:
+                    s = df[col]
+                    n_unique = int(s.nunique())
+                    n_null = int(s.isna().sum())
+                    missing_pct = (n_null / total_rows * 100) if total_rows > 0 else 0.0
+                    
+                    # Determine cardinality level
+                    if n_unique < 10:
+                        cardinality = "low"
+                    elif n_unique < 100:
+                        cardinality = "medium"
+                    else:
+                        cardinality = "high"
+                    
+                    # Check column type
+                    is_numeric = pd.api.types.is_numeric_dtype(s)
+                    is_categorical = pd.api.types.is_categorical_dtype(s) or (
+                        not is_numeric and not pd.api.types.is_datetime64_any_dtype(s)
+                    )
+                    
+                    col_info = {
+                        "dtype": str(s.dtype),
+                        "n_unique": n_unique,
+                        "n_null": n_null,
+                        "missing_pct": round(missing_pct, 2),
+                        "cardinality": cardinality,
+                        "is_numeric": is_numeric,
+                        "is_categorical": is_categorical,
+                    }
+                    
+                    # Add numeric distribution summary
+                    if is_numeric and not s.isna().all():
+                        try:
+                            numeric_stats = {
+                                "mean": float(s.mean()),
+                                "median": float(s.median()),
+                                "std": float(s.std()) if len(s.dropna()) > 1 else 0.0,
+                                "min": float(s.min()),
+                                "max": float(s.max()),
+                                "q25": float(s.quantile(0.25)),
+                                "q75": float(s.quantile(0.75)),
+                            }
+                            col_info["numeric_stats"] = numeric_stats
+                        except Exception as e:
+                            self.logger.warning(f"Could not compute numeric stats for {col}: {e}")
+                    
+                    # Add unique category counts (top 10)
+                    if is_categorical and not s.isna().all():
+                        try:
+                            value_counts = s.value_counts().head(10)
+                            top_categories = {
+                                str(k): int(v) for k, v in value_counts.items()
+                            }
+                            col_info["top_categories"] = top_categories
+                        except Exception as e:
+                            self.logger.warning(f"Could not compute category counts for {col}: {e}")
+                    
+                    profile["tables"][table_name]["columns"][col] = col_info
+            
+            return profile
+        except Exception as e:
+            self.logger.warning(f"Could not compute session profile: {e}")
+            return {"tables": {}}
+
     def get_session_schema(self, session_id: str) -> Dict[str, Any]:
         """
         Get schema information for session tables.
@@ -203,18 +306,20 @@ def prepare_state_dataframes(session_id: str, streamlit_session_state: Any = Non
         dfs = loader.load_session_dataframes(session_id)
         schema = loader.get_session_schema(session_id)
         history = loader.get_operation_history(session_id, streamlit_session_state)
-        
+        data_profile = loader.get_session_profile(session_id)
         return {
             "df_dict": dfs,
             "schema": schema,
-            "operation_history": history
+            "operation_history": history,
+            "data_profile": data_profile,
         }
     except Exception as e:
         logger.error(f"Error preparing state dataframes: {e}")
         return {
             "df_dict": {},
             "schema": {},
-            "operation_history": []
+            "operation_history": [],
+            "data_profile": {"tables": {}},
         }
 
 

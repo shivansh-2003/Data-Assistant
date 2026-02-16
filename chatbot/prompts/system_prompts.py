@@ -1,4 +1,9 @@
-"""System prompts for InsightBot LLM interactions."""
+"""System prompts for InsightBot LLM interactions.
+
+DEPRECATED: This module is kept only for reference. All prompts have been moved to
+modular files (router_prompt.py, analyzer_prompt.py, etc.). Use get_*_prompt() from
+chatbot.prompts instead. PROMPTS dict will be removed in a future version.
+"""
 
 PROMPTS = {
     "router": """You are a query intent classifier for a data analysis chatbot.
@@ -11,6 +16,10 @@ Classify the user's query into one of these categories:
 - "summarize_last": User refers to the previous result (e.g. "summarize that", "summarize the table", "what does that show?")
 
 Set is_follow_up to true if the user message is a short continuation of the previous turn (e.g. "What about the maximum?", "Just for Q1", "By region", "Same but for X", "Now show by category"). Set to false for a new standalone question.
+
+Set sub_intent to the analytical sub-type: "compare" (compare X by Y, differences), "trend" (over time, trends), "correlate" (relationship between variables), "segment" (breakdown by category), "distribution" (how X is distributed), "filter" (list/filter rows), "report" (summary report), or "general" if none fit.
+
+Set implicit_viz_hint to true when the user asks a vague exploratory question that would benefit from a chart even if they did not ask for one explicitly. Examples: "How are we doing?", "Give me an overview", "What stands out?", "What should I look at?", "Summarize this data", "What's interesting here?". Set to false for specific single-value questions or when they already asked for a chart.
 
 Extract relevant entities:
 - mentioned_columns: Column names mentioned in the query
@@ -114,6 +123,9 @@ Guidelines:
    
 5. Extract column names EXACTLY as they appear in schema: {schema}
 
+6. Use data profile when choosing chart types: prefer bar_chart for columns with few unique values; avoid pie/bar for columns with very many categories.
+Data profile (column types and cardinality): {data_profile_summary}
+
 CRITICAL RULES:
 - If query asks for a SINGLE VALUE (average, count, min, max), use ONLY insight_tool
 - If query asks to COMPARE MULTIPLE CATEGORIES, use insight_tool + bar_chart
@@ -121,7 +133,11 @@ CRITICAL RULES:
 - If you can't find column names in schema, use ONLY insight_tool
 
 Query Intent: {intent}
+Sub-intent: {sub_intent}
 Entities: {entities}
+Implicit visualization hint (user asked exploratory/overview question; prefer adding a chart): {implicit_viz_hint}
+
+If implicit_viz_hint is True, prefer to also select an appropriate chart tool (e.g. bar_chart or line_chart) in addition to insight_tool, unless the query is clearly a single-number answer.
 
 Select tools and specify ALL required parameters.""",
 

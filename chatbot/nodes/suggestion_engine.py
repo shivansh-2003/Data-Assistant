@@ -9,7 +9,7 @@ from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
 
-from ..prompts import PROMPTS
+from ..prompts import get_suggestion_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -41,15 +41,12 @@ def suggestion_node(state: Dict) -> Dict:
         schema = state.get("schema", {})
         table_names = state.get("table_names", [])
 
-        prompt = PROMPTS["suggestions"]
-        context = f"""User's last question: {last_user}
-
-Answer summary: {last_insight}
-
-Schema (tables and columns): {schema}
-Table names: {table_names}
-
-Output exactly 3 follow-up questions, one per line:"""
+        # Format prompt using modular prompt function
+        system_prompt = get_suggestion_prompt(
+            last_query=last_user,
+            insight_summary=last_insight,
+            schema=schema
+        )
 
         llm = ChatOpenAI(
             model=os.getenv("OPENAI_MODEL", "gpt-4o"),
@@ -57,8 +54,8 @@ Output exactly 3 follow-up questions, one per line:"""
             api_key=os.getenv("OPENAI_API_KEY")
         )
         response = llm.invoke([
-            SystemMessage(content=prompt),
-            HumanMessage(content=context)
+            SystemMessage(content=system_prompt),
+            HumanMessage(content="Output exactly 3 follow-up questions, one per line:")
         ])
         text = (response.content or "").strip()
         lines = [ln.strip() for ln in text.split("\n") if ln.strip()][:3]

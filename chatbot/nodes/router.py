@@ -15,7 +15,8 @@ except ImportError:
     # Fallback for older LangChain versions
     from langchain_core.pydantic_v1 import BaseModel, Field  # type: ignore
 
-from ..prompts import PROMPTS
+from ..constants import INTENT_DATA_QUERY, INTENT_SMALL_TALK, INTENT_SUMMARIZE_LAST, TOOL_INSIGHT
+from ..prompts import get_router_prompt, get_context_resolver_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ def _resolve_follow_up(user_message: str, conversation_context: Dict) -> Optiona
             temperature=0.1,
             api_key=os.getenv("OPENAI_API_KEY")
         )
-        prompt = PROMPTS["context_resolver"]
+        prompt = get_context_resolver_prompt()
         context_str = f"Previous question: {last_query}\nPrevious answer summary: {last_insight_summary[:300]}"
         response = llm.invoke([
             SystemMessage(content=prompt),
@@ -75,6 +76,14 @@ def _resolve_follow_up(user_message: str, conversation_context: Dict) -> Optiona
 class IntentClassification(BaseModel):
     """Intent classification result."""
     intent: str = Field(description="Query intent: data_query, visualization_request, small_talk, report, or summarize_last")
+    sub_intent: str = Field(
+        default="general",
+        description="Analytical sub-intent: compare, trend, correlate, segment, distribution, filter, report, or general"
+    )
+    implicit_viz_hint: bool = Field(
+        default=False,
+        description="True for vague exploratory queries (e.g. How are we doing?, Give me an overview, What stands out?) where a chart is appropriate even if not explicitly requested"
+    )
     mentioned_columns: List[str] = Field(default_factory=list, description="Column names mentioned")
     operations: List[str] = Field(default_factory=list, description="Operations mentioned (mean, sum, etc.)")
     confidence: float = Field(default=1.0, description="Classification confidence")
@@ -107,10 +116,10 @@ def router_node(state: Dict) -> Dict:
         conversation_context = state.get("conversation_context") or {}
         conv_str = str(conversation_context) if conversation_context else "None"
         
-        # Format prompt
-        system_prompt = PROMPTS["router"].format(
+        # Format prompt using modular prompt function
+        system_prompt = get_router_prompt(
             schema=schema,
-            operation_history=operation_history[-5:] if operation_history else [],
+            operation_history=operation_history,
             conversation_context=conv_str
         )
         
@@ -131,6 +140,8 @@ def router_node(state: Dict) -> Dict:
         
         # Update state
         state["intent"] = result.intent
+        state["sub_intent"] = getattr(result, "sub_intent", "general")
+        state["implicit_viz_hint"] = getattr(result, "implicit_viz_hint", False)
         state["entities"] = {
             "mentioned_columns": result.mentioned_columns,
             "operations": result.operations
@@ -157,18 +168,18 @@ def router_node(state: Dict) -> Dict:
                 logger.info(f"Clarification resolved: {mention} -> {chosen}")
 
         # Resolve follow-up into effective_query when applicable
-        if not state.get("needs_clarification") and result.is_follow_up and conversation_context and result.intent != "small_talk":
+        if not state.get("needs_clarification") and result.is_follow_up and conversation_context and result.intent != INTENT_SMALL_TALK:
             effective = _resolve_follow_up(query, conversation_context)
             if effective:
                 state["effective_query"] = effective
                 logger.info(f"Resolved follow-up to: {effective[:60]}...")
 
         # When user asks to summarize previous result, send a synthetic tool call so insight node runs
-        if result.intent == "summarize_last":
-            state["tool_calls"] = [{"name": "insight_tool", "args": {"query": "Summarize the previous result"}}]
+        if result.intent == INTENT_SUMMARIZE_LAST:
+            state["tool_calls"] = [{"name": TOOL_INSIGHT, "args": {"query": "Summarize the previous result"}}]
 
         # Check for column ambiguity (multiple columns match one mention)
-        if not state.get("needs_clarification") and result.intent not in ("small_talk", "summarize_last"):
+        if not state.get("needs_clarification") and result.intent not in (INTENT_SMALL_TALK, INTENT_SUMMARIZE_LAST):
             amb = _check_column_ambiguity(result.mentioned_columns or [], schema)
             if amb:
                 state["needs_clarification"] = True
@@ -185,6 +196,8 @@ def router_node(state: Dict) -> Dict:
     except Exception as e:
         logger.error(f"Error in router node: {e}", exc_info=True)
         state["error"] = f"Intent classification failed: {str(e)}"
-        state["intent"] = "data_query"  # Default fallback
+        state["intent"] = INTENT_DATA_QUERY
+        state["sub_intent"] = "general"
+        state["implicit_viz_hint"] = False
         return state
 

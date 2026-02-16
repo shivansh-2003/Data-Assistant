@@ -2,12 +2,18 @@
 
 import logging
 import re
+import time
 from typing import Dict, Any, List
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from difflib import get_close_matches
 
+from .code_validator import sanitize_code
+
 logger = logging.getLogger(__name__)
+
+# Maximum rows allowed in result
+MAX_RESULT_ROWS = 100_000
 
 
 def _execute_code_in_thread(code: str, safe_globals: Dict, locals_dict: Dict) -> Any:
@@ -20,15 +26,36 @@ def execute_pandas_code(code: str, dfs: Dict[str, pd.DataFrame], timeout: int = 
     """
     Execute pandas code safely with thread-based timeout.
     
+    Includes:
+    - Code validation (blocks .plot(), file writes, etc.)
+    - Result variable enforcement
+    - Row limit enforcement (max 100k rows)
+    - Execution time profiling
+    
     Args:
         code: Pandas code to execute
         dfs: Dictionary of DataFrames
         timeout: Timeout in seconds (default: 10)
         
     Returns:
-        Dict with success, output, and optional error
+        Dict with success, output, execution_time_ms, and optional error
     """
+    start_time = time.time()
+    
     try:
+        # Validate and sanitize code
+        sanitized_code, validation_error = sanitize_code(code)
+        if validation_error:
+            return {
+                "success": False,
+                "output": None,
+                "error": validation_error,
+                "error_type": "validation_error",
+                "suggested_columns": None,
+                "execution_time_ms": int((time.time() - start_time) * 1000)
+            }
+        
+        code = sanitized_code
         # Prepare safe globals
         safe_globals = {
             "pd": pd,
@@ -66,32 +93,54 @@ def execute_pandas_code(code: str, dfs: Dict[str, pd.DataFrame], timeout: int = 
             locals_dict['df'] = list(dfs.values())[0]
         
         # Execute with thread-based timeout
+        exec_start_time = time.time()
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_execute_code_in_thread, code, safe_globals, locals_dict)
             try:
                 result = future.result(timeout=timeout)
+                exec_time_ms = int((time.time() - exec_start_time) * 1000)
                 
-                logger.info("Code executed successfully")
+                # Enforce row limit
+                original_row_count = None
+                truncation_msg = None
+                if isinstance(result, pd.DataFrame):
+                    original_row_count = len(result)
+                    if original_row_count > MAX_RESULT_ROWS:
+                        logger.warning(f"Result has {original_row_count} rows, truncating to {MAX_RESULT_ROWS}")
+                        result = result.head(MAX_RESULT_ROWS)
+                        truncation_msg = f"Result truncated to {MAX_RESULT_ROWS} rows (original: {original_row_count} rows)"
+                elif isinstance(result, pd.Series):
+                    original_row_count = len(result)
+                    if original_row_count > MAX_RESULT_ROWS:
+                        logger.warning(f"Result has {original_row_count} rows, truncating to {MAX_RESULT_ROWS}")
+                        result = result.head(MAX_RESULT_ROWS)
+                        truncation_msg = f"Result truncated to {MAX_RESULT_ROWS} rows (original: {original_row_count} rows)"
+                
+                logger.info(f"Code executed successfully in {exec_time_ms}ms")
                 
                 return {
                     "success": True,
                     "output": result,
-                    "error": None,
+                    "error": truncation_msg,
                     "error_type": None,
-                    "suggested_columns": None
+                    "suggested_columns": None,
+                    "execution_time_ms": exec_time_ms
                 }
                 
             except FuturesTimeoutError:
+                exec_time_ms = int((time.time() - exec_start_time) * 1000)
                 logger.error(f"Code execution timeout after {timeout}s")
                 return {
                     "success": False,
                     "output": None,
                     "error": f"Execution timed out (>{timeout} seconds)",
                     "error_type": "timeout",
-                    "suggested_columns": None
+                    "suggested_columns": None,
+                    "execution_time_ms": exec_time_ms
                 }
             
     except Exception as e:
+        exec_time_ms = int((time.time() - start_time) * 1000)
         logger.error(f"Error executing pandas code: {e}", exc_info=True)
         err_msg = str(e)
         error_type = "other"
@@ -126,6 +175,7 @@ def execute_pandas_code(code: str, dfs: Dict[str, pd.DataFrame], timeout: int = 
             "output": None,
             "error": err_msg,
             "error_type": error_type,
-            "suggested_columns": suggested_columns
+            "suggested_columns": suggested_columns,
+            "execution_time_ms": exec_time_ms
         }
 
