@@ -32,6 +32,18 @@ def detect_simple_query(query: str) -> Tuple[bool, Optional[str]]:
     for op_type, pattern in simple_patterns.items():
         if re.search(pattern, query_lower):
             return True, op_type
+
+    # Simple correlation-style questions
+    if any(
+        kw in query_lower
+        for kw in [
+            "correlation",
+            "correlate",
+            "relationship between",
+            "correlation between",
+        ]
+    ):
+        return True, "correlation"
     
     # Simple filtering (very basic)
     if re.search(r"^(show|list|find|filter)\s+.*(?:where|with|having)", query_lower):
@@ -94,6 +106,16 @@ def execute_simple_query(
         if operation == "count":
             result = len(df)
             logger.info(f"Rule-based count: {result}")
+            return result
+
+        if operation == "correlation":
+            # Use numeric columns only for correlation matrix
+            numeric_df = df.select_dtypes(include=["number"])
+            if numeric_df.empty or numeric_df.shape[1] < 2:
+                logger.warning("Not enough numeric columns for correlation matrix")
+                return None
+            result = numeric_df.corr()
+            logger.info("Rule-based correlation matrix computed with df.corr()")
             return result
         
         # Extract column name

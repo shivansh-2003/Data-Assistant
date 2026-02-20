@@ -1,8 +1,30 @@
-"""Visualization node for chart generation."""
+"""Visualization node for chart generation.
+
+Design notes (for developers):
+
+- **LLM tools (in `chatbot/tools/simple_charts.py` and `complex_charts.py`)**
+  only return lightweight, JSON-serializable **chart configuration dicts**
+  (e.g. `{\"chart_type\": \"bar\", \"x_col\": ..., \"y_col\": ...}`).
+- This node (`viz_node`) is responsible for:
+  - Validating those configs against the actual session data.
+  - Storing the cleaned config + derived `viz_type` + `chart_reason` in graph
+    state (`state[\"viz_config\"]`, `state[\"viz_type\"]`, `state[\"chart_reason\"]`).
+- **It does not build Plotly figures.** Figure creation is done in the
+  Streamlit layer (`data_visualization/visualization.generate_chart` and
+  `chatbot/ui/chart_ui.py`) so:
+  - LangGraph checkpoints remain serializable (no Plotly objects in state).
+  - All visual theming and layout stay in the UI code.
+
+So the mental model is:
+
+  LLM tool → config dict → `viz_node` validation + state update →
+  Streamlit UI turns `viz_config` into an actual Plotly chart.
+"""
 
 import logging
 from typing import Dict, Optional, Any
 import pandas as pd
+import json
 from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
@@ -20,6 +42,7 @@ from ..constants import (
     TOOL_DASHBOARD,
 )
 from ..utils.profile_formatter import is_suitable_for_chart
+from ..utils.session_loader import SessionLoader
 
 logger = logging.getLogger(__name__)
 
@@ -209,9 +232,20 @@ def _get_chart_reason(chart_name: str, config: Dict) -> str:
 @observe(name="chatbot_viz", as_type="chain")
 def viz_node(state: Dict) -> Dict:
     """
-    Execute visualization tools and store chart configuration.
+    Execute visualization tools (bar_chart, line_chart, etc.) and store chart configuration.
     
-    Note: Stores config only (not figure) since figures aren't serializable.
+    This node executes chart tools that were selected by the analyzer node.
+    Unlike LangChain's ToolNode (which auto-executes any tool), this node provides
+    specialized execution logic for visualization:
+    
+    Process:
+    1. Extract chart tool calls from state["tool_calls"] (e.g., bar_chart, line_chart)
+    2. Validate tool parameters against schema and data profile
+    3. Store chart configuration in state["viz_config"] (JSON-serializable dict)
+    4. Note: Actual Plotly figures are generated later in Streamlit UI layer
+    
+    The tools return config dicts (not Plotly figures) to keep LangGraph state serializable.
+    See: chatbot/tools/simple_charts.py for tool definitions.
     """
     try:
         update_trace_context(session_id=state.get("session_id"), metadata={"node": "viz"})
@@ -227,27 +261,36 @@ def viz_node(state: Dict) -> Dict:
         if not session_id:
             logger.warning("No session_id in state for visualization")
             return state
-        
+
+        # Load session data once for validation and fallback
+        dfs = SessionLoader().load_session_dataframes(session_id)
+
         # Process first viz call (can extend to handle multiple)
         viz_call = viz_calls[0]
         viz_config = viz_call.get("args", {})
         chart_name = viz_call.get("name", "unknown")
-        
-        # Handle correlation_matrix special case: auto-select numeric columns before validation
-        if chart_name == TOOL_CORRELATION_MATRIX:
-            from ..utils.session_loader import SessionLoader
-            loader = SessionLoader()
-            dfs = loader.load_session_dataframes(session_id)
-            table_name = viz_config.get("table_name") or (list(dfs.keys())[0] if dfs else None)
-            df = dfs.get(table_name) if table_name else None
-            if df is not None and not df.empty:
-                numeric_cols = list(df.select_dtypes(include=['number']).columns)
-                if len(numeric_cols) >= 2:
-                    viz_config["heatmap_columns"] = numeric_cols
-                    chart_name = TOOL_HEATMAP_CHART  # Treat as heatmap for downstream processing
-                else:
-                    state["viz_error"] = "Correlation matrix requires at least 2 numeric columns."
-                    return state
+        table_name = viz_config.get("table_name") or (list(dfs.keys())[0] if dfs else None)
+        df = dfs.get(table_name) if table_name else None
+
+        # Normalize heatmap_chart args: tool takes "columns" but config needs "heatmap_columns"
+        if chart_name == TOOL_HEATMAP_CHART:
+            if "columns" in viz_config and "heatmap_columns" not in viz_config:
+                viz_config["heatmap_columns"] = viz_config.pop("columns")
+
+        # Normalize histogram args: tool takes "column" but generate_chart expects "x_col"
+        if chart_name == TOOL_HISTOGRAM:
+            if viz_config.get("column") and not viz_config.get("x_col"):
+                viz_config["x_col"] = viz_config.get("column")
+
+        # Handle correlation_matrix: auto-select numeric columns before validation
+        if chart_name == TOOL_CORRELATION_MATRIX and df is not None and not df.empty:
+            numeric_cols = list(df.select_dtypes(include=["number"]).columns)
+            if len(numeric_cols) >= 2:
+                viz_config["heatmap_columns"] = numeric_cols
+                chart_name = TOOL_HEATMAP_CHART
+            else:
+                state["viz_error"] = "Correlation matrix requires at least 2 numeric columns."
+                return state
         
         # Validate required parameters
         validation_error = validate_viz_config(chart_name, viz_config)
@@ -257,6 +300,12 @@ def viz_node(state: Dict) -> Dict:
             return state
         
         # Store config (not figure - figures aren't serializable)
+        # Ensure chart_type is set in config for UI rendering
+        if "chart_type" not in viz_config:
+            if chart_name in (TOOL_CORRELATION_MATRIX, TOOL_HEATMAP_CHART):
+                viz_config["chart_type"] = "heatmap"
+            else:
+                viz_config["chart_type"] = chart_name.replace("_chart", "")
         state["viz_config"] = viz_config
         # Map chart_name to viz_type (remove _chart suffix, handle special cases)
         if chart_name in (TOOL_CORRELATION_MATRIX, TOOL_HEATMAP_CHART):
@@ -275,14 +324,6 @@ def viz_node(state: Dict) -> Dict:
         chart_reason = _get_chart_reason(chart_name, viz_config)
         state["chart_reason"] = chart_reason
 
-        # Load data for data-aware validation and chart generation
-        from ..utils.session_loader import SessionLoader
-        loader = SessionLoader()
-        dfs = loader.load_session_dataframes(session_id)
-        table_name = viz_config.get("table_name") or (list(dfs.keys())[0] if dfs else None)
-        df = dfs.get(table_name) if table_name else None
-        
-        # Get data_profile from state for enhanced validation
         data_profile = state.get("data_profile")
 
         # Data-aware validation: cardinality and column types before calling generate_chart
@@ -300,21 +341,10 @@ def viz_node(state: Dict) -> Dict:
         try:
             from data_visualization.visualization import generate_chart
             if table_name and df is not None:
-                chart_type = chart_name.replace("_chart", "")
-                if chart_type == "histogram":
-                    chart_type = "histogram"
-                elif chart_type == "correlation_matrix":
-                    chart_type = "heatmap"
-                
-                # Handle heatmap with multiple columns
-                heatmap_cols = None
-                if chart_type == "heatmap":
-                    heatmap_cols = viz_config.get("heatmap_columns")
-                    if not heatmap_cols:
-                        # Fallback: use x_col and y_col if available
-                        if viz_config.get("x_col") and viz_config.get("y_col"):
-                            heatmap_cols = [viz_config.get("x_col"), viz_config.get("y_col")]
-                
+                chart_type = "heatmap" if chart_name in (TOOL_CORRELATION_MATRIX, TOOL_HEATMAP_CHART) else chart_name.replace("_chart", "")
+                heatmap_cols = viz_config.get("heatmap_columns")
+                if chart_type == "heatmap" and not heatmap_cols and viz_config.get("x_col") and viz_config.get("y_col"):
+                    heatmap_cols = [viz_config["x_col"], viz_config["y_col"]]
                 generate_chart(
                     df=df,
                     chart_type=chart_type,
@@ -329,24 +359,22 @@ def viz_node(state: Dict) -> Dict:
             state["viz_error"] = "Too many categories or invalid chart data." if "categories" in err_msg.lower() or "unique" in err_msg.lower() else err_msg[:200]
             # Fallback: top 10 table for the same x/y/agg if possible
             try:
-                from ..utils.session_loader import SessionLoader
-                loader = SessionLoader()
-                dfs = loader.load_session_dataframes(session_id)
-                tname = viz_config.get("table_name") or (list(dfs.keys())[0] if dfs else None)
                 x_col = viz_config.get("x_col")
                 y_col = viz_config.get("y_col")
                 agg_func = viz_config.get("agg_func") or "count"
-                if tname and tname in dfs and x_col and x_col in dfs[tname].columns:
-                    df = dfs[tname]
-                    if y_col and y_col in df.columns and agg_func != "none":
-                        fallback_df = df.groupby(x_col)[y_col].agg(agg_func).head(10).reset_index()
+                if table_name and table_name in dfs and x_col and x_col in dfs[table_name].columns:
+                    _df = dfs[table_name]
+                    if y_col and y_col in _df.columns and agg_func != "none":
+                        fallback_df = _df.groupby(x_col)[y_col].agg(agg_func).head(10).reset_index()
                     else:
-                        fallback_df = df.groupby(x_col).size().head(10).reset_index(name="count")
+                        fallback_df = _df.groupby(x_col).size().head(10).reset_index(name="count")
+                    records = json.loads(fallback_df.to_json(orient="records"))
+                    rows, cols = (int(fallback_df.shape[0]), int(fallback_df.shape[1]))
                     state["insight_data"] = {
                         "type": "dataframe",
-                        "data": fallback_df.to_dict("records"),
+                        "data": records,
                         "columns": list(fallback_df.columns),
-                        "shape": fallback_df.shape
+                        "shape": (rows, cols),
                     }
             except Exception:
                 pass

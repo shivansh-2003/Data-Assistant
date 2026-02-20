@@ -11,6 +11,7 @@ from observability.langfuse_client import update_trace_context
 
 from ..constants import INTENT_DATA_QUERY, INTENT_SMALL_TALK
 from ..prompts import get_small_talk_prompt, get_responder_prompt
+from ..utils.state_helpers import get_current_query
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +47,8 @@ def responder_node(state: Dict) -> Dict:
     try:
         update_trace_context(session_id=state.get("session_id"), metadata={"node": "responder"})
         intent = state.get("intent", INTENT_DATA_QUERY)
-        messages = state.get("messages", [])
-        last_message = messages[-1]
-        query = last_message.content if hasattr(last_message, 'content') else str(last_message)
-        
+        query = get_current_query(state)
+
         if intent == INTENT_SMALL_TALK:
             response_text = generate_small_talk_response(query)
         # Handle "did you mean" column suggestion

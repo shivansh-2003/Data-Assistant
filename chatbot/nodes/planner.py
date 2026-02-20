@@ -12,6 +12,7 @@ from observability.langfuse_client import update_trace_context
 
 from ..constants import INTENT_SMALL_TALK, INTENT_DATA_QUERY, TOOL_INSIGHT
 from ..prompts import get_planner_prompt
+from ..utils.state_helpers import get_current_query
 
 logger = logging.getLogger(__name__)
 
@@ -134,11 +135,7 @@ def planner_node(state: Dict) -> Dict:
             state["needs_planning"] = False
             return state
         
-        # Get query
-        messages = state.get("messages", [])
-        last_message = messages[-1]
-        query = state.get("effective_query") or (last_message.content if hasattr(last_message, 'content') else str(last_message))
-        
+        query = get_current_query(state)
         insight_call = insight_calls[0]
         insight_query = insight_call.get("args", {}).get("query", query)
         

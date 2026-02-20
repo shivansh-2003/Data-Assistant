@@ -63,7 +63,7 @@ So: **it is engineered** and, after the recent refactors, **close to an engineer
   **Resolved.** UI split into `chatbot/ui/`: `message_history.py`, `chat_input.py`, `chart_ui.py`. `streamlit_ui.py` orchestrates only (~180 lines).
 
 - **Lazy imports**  
-  Some nodes still do `from ..utils.session_loader import SessionLoader` inside the node. Optional cleanup: move to top of file.
+  Addressed: `SessionLoader` and `get_current_query` are imported at top level in nodes that need them. Shared query resolution lives in `utils/state_helpers.get_current_query(state)` so nodes no longer duplicate "effective_query or last message content".
 
 - **~~No formal node contract~~**  
   **Resolved.** `state.py` defines `Node = Callable[[Dict[str, Any]], Dict[str, Any]]`; exported from `chatbot` and used for type clarity.

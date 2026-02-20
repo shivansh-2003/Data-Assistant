@@ -150,8 +150,29 @@ See `execution/GUARDRAILS.md` for detailed documentation.
 
 ## Tools
 
-- **`insight_tool`** (`tools/data_tools.py`): Declarative hook for “run pandas analysis”; actual code is generated in the insight node.
-- **Charts** (`tools/simple_charts.py`, `tools/complex_charts.py`): `bar_chart`, `line_chart`, `scatter_chart`, `histogram`, plus combo/dashboard. Parameters (e.g. x_col, y_col, agg_func) are filled by the analyzer and consumed by the viz node to build `viz_config` and call `data_visualization`.
+InsightBot uses LangChain's `@tool` decorator pattern for tool definition and LLM function calling:
+https://docs.langchain.com/oss/python/langchain/tools
+
+**Tool Definition & Selection:**
+- Tools are defined with `@tool` decorator in `chatbot/tools/`
+- Analyzer node binds tools to LLM using `llm.bind_tools(tools)`
+- LLM selects which tools to call based on user query
+- Tool calls are extracted and stored in `state["tool_calls"]`
+
+**Tool Execution (Custom Pattern):**
+Unlike LangChain's `ToolNode` (which auto-executes tools), InsightBot uses specialized execution nodes:
+- **`insight_tool`** (`tools/data_tools.py`): Executed in `insight_node` for pandas code generation and execution
+- **Chart tools** (`tools/simple_charts.py`, `tools/complex_charts.py`): Executed in `viz_node` for chart config validation and storage
+
+This custom pattern allows:
+- Domain-specific execution logic (data analysis vs visualization)
+- Better error handling per tool type
+- Separation of concerns (config generation vs execution)
+
+**Available Tools:**
+- `insight_tool`: Data analysis queries (mean, sum, filter, groupby, correlation, etc.)
+- `bar_chart`, `line_chart`, `scatter_chart`, `histogram`, `area_chart`, `box_chart`, `heatmap_chart`, `correlation_matrix`: Visualization tools
+- `combo_chart`, `dashboard`: Complex visualization tools
 
 ---
 

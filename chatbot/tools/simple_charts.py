@@ -1,8 +1,30 @@
-"""Simple chart tools wrapping existing visualization module."""
+"""Simple chart tools following LangChain's @tool pattern.
+
+These tools follow LangChain's tool-calling pattern:
+https://docs.langchain.com/oss/python/langchain/tools
+
+Key design decisions:
+- Tools **only** return a small, JSON-serializable dict that describes the chart
+  (type, x/y columns, aggregation, etc.), NOT Plotly figures.
+- The actual Plotly figure is built later in the Streamlit UI layer using
+  `data_visualization.visualization.generate_chart` so that:
+  - The LangGraph checkpoint state stays lightweight and serializable.
+  - Frontend code fully controls how charts are rendered and themed.
+
+Execution flow:
+  1. Analyzer node binds tools to LLM using `llm.bind_tools(tools)`
+  2. LLM selects chart tool based on query (e.g., bar_chart, line_chart)
+  3. Tool returns config dict (executed in analyzer via LLM function calling)
+  4. `viz_node` validates and stores config in state["viz_config"]
+  5. Streamlit UI renders Plotly figure from config
+
+As a developer: think of these as \"intent + config\" tools, not direct Plotly
+wrappers. Unlike LangChain's ToolNode (which auto-executes), we use specialized
+execution in `viz_node` for validation and state management.
+"""
 
 from langchain_core.tools import tool
 from typing import Optional
-import plotly.graph_objects as go
 
 
 @tool
@@ -23,7 +45,8 @@ def bar_chart(x_col: str, y_col: Optional[str] = None, agg_func: str = "count", 
         table_name: Name of the table to use
         
     Returns:
-        Dict with chart configuration
+        Dict with chart configuration (JSON-serializable). The actual Plotly
+        figure is created later in the Streamlit UI from this config.
         
     Example:
         bar_chart(x_col="Company", y_col="Price", agg_func="mean")
@@ -57,7 +80,8 @@ def line_chart(x_col: str, y_col: str, agg_func: str = "mean", color_col: Option
         table_name: Name of the table to use
         
     Returns:
-        Dict with chart configuration
+        Dict with chart configuration (JSON-serializable). The actual Plotly
+        figure is created later in the Streamlit UI from this config.
     """
     return {
         "tool": "line_chart",
@@ -88,7 +112,8 @@ def scatter_chart(x_col: str, y_col: str, color_col: Optional[str] = None, size_
         table_name: Name of the table to use
         
     Returns:
-        Dict with chart configuration
+        Dict with chart configuration (JSON-serializable). The actual Plotly
+        figure is created later in the Streamlit UI from this config.
     """
     return {
         "tool": "scatter_chart",
@@ -117,7 +142,8 @@ def histogram(column: str, bins: int = 30, table_name: str = "current") -> dict:
         table_name: Name of the table to use
         
     Returns:
-        Dict with chart configuration
+        Dict with chart configuration (JSON-serializable). The actual Plotly
+        figure is created later in the Streamlit UI from this config.
     """
     return {
         "tool": "histogram",
@@ -147,7 +173,8 @@ def area_chart(x_col: str, y_col: str, agg_func: str = "sum", color_col: Optiona
         table_name: Name of the table to use
         
     Returns:
-        Dict with chart configuration
+        Dict with chart configuration (JSON-serializable). The actual Plotly
+        figure is created later in the Streamlit UI from this config.
     """
     return {
         "tool": "area_chart",
@@ -178,7 +205,8 @@ def box_chart(y_col: str, x_col: Optional[str] = None, color_col: Optional[str] 
         table_name: Name of the table to use
         
     Returns:
-        Dict with chart configuration
+        Dict with chart configuration (JSON-serializable). The actual Plotly
+        figure is created later in the Streamlit UI from this config.
     """
     return {
         "tool": "box_chart",
@@ -205,7 +233,8 @@ def heatmap_chart(columns: list, table_name: str = "current") -> dict:
         table_name: Name of the table to use
         
     Returns:
-        Dict with chart configuration
+        Dict with chart configuration (JSON-serializable). The actual Plotly
+        figure is created later in the Streamlit UI from this config.
     """
     return {
         "tool": "heatmap_chart",
@@ -229,7 +258,9 @@ def correlation_matrix(table_name: str = "current") -> dict:
         table_name: Name of the table to use
         
     Returns:
-        Dict with chart configuration (auto-selects all numeric columns)
+        Dict with chart configuration (auto-selects all numeric columns).
+        The actual correlation heatmap is generated later in the UI using
+        `df.corr()` and Plotly based on this config.
     """
     return {
         "tool": "correlation_matrix",

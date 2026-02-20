@@ -5,6 +5,7 @@ from typing import Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 import os
+import json
 from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
@@ -13,6 +14,8 @@ from ..constants import INTENT_SUMMARIZE_LAST, TOOL_INSIGHT
 from ..prompts import get_summarizer_prompt
 from ..execution import generate_pandas_code, execute_pandas_code
 from ..execution.rule_based_executor import try_rule_based_execution
+from ..utils.session_loader import SessionLoader
+from ..utils.state_helpers import get_current_query
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +30,20 @@ def _extract_bad_column(error_msg: str) -> str:
 @observe(name="chatbot_insight", as_type="chain")
 def insight_node(state: Dict) -> Dict:
     """
-    Generate pandas code, execute it, and summarize results.
+    Execute the insight_tool: generate pandas code, execute it, and summarize results.
+    
+    This node executes the `insight_tool` that was selected by the analyzer node.
+    Unlike LangChain's ToolNode (which auto-executes any tool), this node provides
+    specialized execution logic for data analysis:
     
     Process:
-    1. Generate pandas code using LLM
-    2. Execute code safely
-    3. Summarize output into natural language
-    4. Store insight in state
+    1. Extract `insight_tool` calls from state["tool_calls"]
+    2. Generate pandas code using LLM (or use rule-based executor for simple queries)
+    3. Execute code safely with guardrails
+    4. Summarize output into natural language
+    5. Store results in state (insight_data, last_insight, etc.)
+    
+    See: chatbot/tools/data_tools.py for the tool definition.
     """
     try:
         update_trace_context(session_id=state.get("session_id"), metadata={"node": "insight"})
@@ -45,19 +55,12 @@ def insight_node(state: Dict) -> Dict:
         if not insight_calls:
             return state
         
-        # Get query and context
-        messages = state.get("messages", [])
-        last_message = messages[-1]
-        query = last_message.content if hasattr(last_message, 'content') else str(last_message)
-        
         session_id = state.get("session_id")
         schema = state.get("schema", {})
-        
-        # Load DataFrames from Redis
-        from ..utils.session_loader import SessionLoader
-        loader = SessionLoader()
+        query = get_current_query(state)
+
         try:
-            df_dict = loader.load_session_dataframes(session_id)
+            df_dict = SessionLoader().load_session_dataframes(session_id)
         except Exception as e:
             state["error"] = f"Could not load data: {str(e)}"
             return state
@@ -66,13 +69,9 @@ def insight_node(state: Dict) -> Dict:
             state["error"] = "No data available for analysis"
             return state
         
-        # Use effective_query when present (follow-up resolution from router)
-        effective_query = state.get("effective_query")
-        if effective_query:
-            query = effective_query
         # Process first insight call (can extend to handle multiple)
         insight_call = insight_calls[0]
-        insight_query = effective_query or insight_call.get("args", {}).get("query", query)
+        insight_query = state.get("effective_query") or insight_call.get("args", {}).get("query", query)
 
         # Summarize previous result (no code run) when user said "summarize that"
         if state.get("intent") == INTENT_SUMMARIZE_LAST:
@@ -186,29 +185,42 @@ def insight_node(state: Dict) -> Dict:
         
         # Store output based on type for serialization
         import pandas as pd
-        
+        import numpy as np
+
         if isinstance(output, pd.DataFrame):
-            # DataFrame: store as list of records for table display
+            # DataFrame: use to_json+json.loads to ensure JSON-serializable scalars
+            records = json.loads(output.to_json(orient="records"))
+            rows, cols = (int(output.shape[0]), int(output.shape[1]))
             state["insight_data"] = {
                 "type": "dataframe",
-                "data": output.to_dict('records'),
+                "data": records,
                 "columns": list(output.columns),
-                "shape": output.shape
+                "shape": (rows, cols),
             }
         elif isinstance(output, pd.Series):
             # Series: convert to DataFrame first (for aggregations like mean by group)
             df = output.reset_index()
+            records = json.loads(df.to_json(orient="records"))
+            rows, cols = (int(df.shape[0]), int(df.shape[1]))
             state["insight_data"] = {
                 "type": "dataframe",
-                "data": df.to_dict('records'),
+                "data": records,
                 "columns": list(df.columns),
-                "shape": df.shape
+                "shape": (rows, cols),
             }
         else:
-            # Single value: store as-is
+            # Single value: ensure it's a plain Python scalar (not numpy scalar)
+            try:
+                if hasattr(output, "item"):
+                    output = output.item()  # numpy scalar / 0-d array
+                elif isinstance(output, np.generic):
+                    output = output.tolist()
+            except Exception:
+                # Best effort; if it still fails, let serializer handle or error
+                pass
             state["insight_data"] = {
                 "type": "value",
-                "data": output
+                "data": output,
             }
         
         # Add to sources
