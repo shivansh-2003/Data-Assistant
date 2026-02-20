@@ -311,74 +311,62 @@ flowchart TD
     style END fill:#4CAF50
 ```
 
-### 4. InsightBot - Intelligent Chatbot Tab
-- **🤖 LangGraph-Powered Architecture**: State-of-the-art conversational AI with persistent memory
-- **💬 Multi-Turn Conversations**: Maintains context across the entire conversation with memory checkpointing
-- **🧠 Context-Aware Responses**: Uses schema, statistics, and operation history for accurate answers
-- **📊 Automatic Visualization Detection**: Intelligently detects when charts are needed and generates appropriate visualizations
-- **🔧 Function Calling**: Dynamic tool selection based on query intent (statistical, comparative, visualization)
-- **🎯 Intent Classification**: Routes queries to appropriate processing nodes (analyzer, insight, visualization, responder)
-- **⚡ Safe Code Execution**: Generates and executes pandas code in sandboxed environment with timeout protection
-- **📈 Real-time Chart Generation**: Embeds interactive Plotly charts directly in chat responses
-- **🔄 Session Integration**: Seamlessly loads DataFrames from Redis for instant analysis
-- **📝 Query Types Supported**:
-  - Statistical queries (averages, counts, sums, aggregations)
-  - Comparative queries (compare X by Y, rankings, differences)
-  - Filtering & sorting (list items matching criteria, top N)
-  - Visualization requests (explicit and implicit chart generation)
-  - Exploratory queries (patterns, correlations, distributions)
-  - Debugging queries (operation history, schema inspection)
+### 4. InsightBot — Intelligent Chatbot Tab
+- **🤖 LangGraph architecture**: State graph with router, analyzer, planner, insight, viz, responder, clarification, and suggestion nodes; persistent memory via MemorySaver.
+- **💬 Multi-turn conversations**: Context-aware follow-ups (e.g. “What about the maximum?” resolved into full questions); conversation context tracks last columns, aggregation, and filters.
+- **🔍 Column clarification**: When multiple columns match a term (e.g. “sales”), asks “Did you mean X or Y?” and resolves on the next turn.
+- **💡 Suggestion engine**: After each response, three contextual follow-up questions as clickable chips.
+- **📊 Per-turn visualizations**: Each AI message keeps its own chart/table/code; previous visualizations stay visible (response_snapshots).
+- **📋 Report & summarize**: “Give me a report on X” and “summarize that” / “what does that show?” using the last result.
+- **🔧 Function calling**: Analyzer selects tools (insight_tool, bar_chart, line_chart, scatter_chart, histogram, heatmap_chart, correlation_matrix, etc.) via LLM.
+- **🎯 Intent classification**: Routes to data_query, visualization_request, small_talk, report, summarize_last; triggers clarification when needed.
+- **⚡ Safe code execution**: LLM-generated pandas code runs in a sandbox with timeout and guardrails; correlation uses numeric columns only; rule-based fallback for simple queries.
+- **📈 Charts in chat**: Plotly charts and tables per response; heatmap for correlation queries; fallback to table when chart fails (e.g. too many categories).
+- **📝 Query types**: Statistical (mean, sum, count), comparative (compare X by Y), filtering & sorting, visualization (bar/line/scatter/histogram/heatmap), correlation (two-column or full matrix), report, summarize_last, and follow-ups.
+
+
 
 #### InsightBot LangGraph Architecture
 
 ```mermaid
 flowchart TD
-    START([User Query]) --> ENTRY[Entry Point]
-    ENTRY --> ROUTER[Router Node<br/>Intent Classification]
+    START([User Query]) --> ROUTER[Router Node<br/>Intent + Context + Clarification]
     
-    ROUTER --> CLASSIFY{Classify Intent}
-    CLASSIFY -->|data_query| ANALYZER[Analyzer Node<br/>Tool Selection]
-    CLASSIFY -->|visualization_request| ANALYZER
-    CLASSIFY -->|small_talk| RESPONDER[Responder Node]
+    ROUTER --> ROUTE{Route}
+    ROUTE -->|needs_clarification| CLARIFY[Clarification Node<br/>"Did you mean X or Y?"]
+    ROUTE -->|small_talk| RESPONDER[Responder Node]
+    ROUTE -->|summarize_last| INSIGHT[Insight Node]
+    ROUTE -->|data_query / viz / report| ANALYZER[Analyzer Node<br/>Tool Selection]
     
-    ANALYZER --> SELECT{Select Tools}
-    SELECT -->|insight_tool| INSIGHT[Insight Node]
-    SELECT -->|chart_tool| VIZ[Visualization Node]
-    SELECT -->|both| BOTH[Both Nodes]
+    CLARIFY --> END1([END])
     
-    INSIGHT --> GENERATE[Generate Pandas Code<br/>LLM Code Generator]
-    GENERATE --> EXECUTE[Safe Code Execution<br/>ThreadPoolExecutor]
-    EXECUTE --> SUCCESS{Success?}
+    ANALYZER --> INSIGHT
+    ANALYZER --> VIZ[Viz Node]
+    ANALYZER --> RESPONDER
     
-    SUCCESS -->|Yes| SUMMARIZE[Summarize Results<br/>LLM Summarizer]
-    SUCCESS -->|No| ERROR[Error Handler]
+    INSIGHT --> GEN[Code Gen + Safe Execute<br/>Summarize]
+    GEN --> VIZ_OR_RESP{Viz in tools?}
+    VIZ_OR_RESP -->|Yes| VIZ
+    VIZ_OR_RESP -->|No| RESPONDER
     
-    SUMMARIZE --> CHECK_VIZ{Visualization Needed?}
-    CHECK_VIZ -->|Yes| VIZ
-    CHECK_VIZ -->|No| RESPONDER
-    
-    VIZ --> LOAD[Load DataFrames<br/>from Redis]
-    LOAD --> CONFIG[Validate Chart Config<br/>Check Parameters]
-    CONFIG --> VALID{Valid?}
-    
-    VALID -->|Yes| CHART[Generate Plotly Chart]
-    VALID -->|No| SKIP[Skip Visualization]
-    
+    VIZ --> LOAD[Load Data from Redis<br/>Validate Config]
+    LOAD --> CHART[Plotly Chart or Fallback]
     CHART --> RESPONDER
-    SKIP --> RESPONDER
-    ERROR --> RESPONDER
     
-    RESPONDER --> FORMAT[Format Final Response<br/>Combine Insights + Charts]
-    FORMAT --> MEMORY[Save to Memory<br/>LangGraph Checkpointer]
-    MEMORY --> END([Display to User])
+    RESPONDER --> FORMAT[Format Response<br/>Append Snapshot]
+    FORMAT --> SUGGEST[Suggestion Node<br/>3 Follow-up Chips]
+    SUGGEST --> MEMORY[MemorySaver Checkpoint]
+    MEMORY --> END2([Display to User])
     
     style START fill:#4CAF50
     style ROUTER fill:#9C27B0
+    style CLARIFY fill:#E91E63
     style ANALYZER fill:#FF9800
     style INSIGHT fill:#2196F3
     style VIZ fill:#00BCD4
     style RESPONDER fill:#4CAF50
-    style END fill:#4CAF50
+    style SUGGEST fill:#8BC34A
+    style END2 fill:#4CAF50
 ```
 
 
@@ -758,11 +746,12 @@ Configured in `ingestion/config.py`:
    - Export as PNG, SVG, or HTML
 
 4. **Chat with Your Data**:
-   - Switch to Chatbot tab
-   - Ask questions about your data (e.g., "What's the average salary by department?")
-   - Get context-aware answers with automatic visualizations when needed
-   - View conversation history and clear chat when needed
-   - Charts are automatically embedded in responses when relevant
+   - Switch to Chatbot tab (InsightBot)
+   - Ask questions (e.g., "What's the average salary by department?", "Show correlation", "Compare sales by region")
+   - Get context-aware answers; follow-ups like "What about the maximum?" are resolved automatically
+   - If a term matches multiple columns, choose from "Did you mean X or Y?"; use suggestion chips for one-click follow-ups
+   - Charts and tables are embedded per message; previous visualizations stay visible when you send new queries
+   - Clear chat from the sidebar when needed
 
 
 ## 📁 Project Structure
@@ -776,28 +765,49 @@ Data-Assistant/
 ├── requirements.txt           # Python dependencies
 ├── README.md                  # This file
 │
-├── chatbot/                   # InsightBot - LangGraph-powered chatbot
+├── chatbot/                   # InsightBot — LangGraph-powered chatbot
 │   ├── __init__.py
-│   ├── state.py              # LangGraph state schema (TypedDict)
+│   ├── state.py              # LangGraph state schema (TypedDict), Node type
 │   ├── graph.py              # StateGraph definition and compilation
-│   ├── streamlit_ui.py       # Streamlit UI components
+│   ├── streamlit_ui.py       # Streamlit UI entry (history, snapshots, chips)
+│   ├── README.md             # Chatbot architecture and flow (full detail)
+│   ├── DEVELOPER.md          # How to extend: add node, add chart, avoid redundancy
 │   ├── nodes/                # LangGraph nodes
-│   │   ├── router.py         # Intent classification node
-│   │   ├── analyzer.py       # Tool selection node (function calling)
-│   │   ├── insight.py        # Pandas code generation and execution
-│   │   ├── viz.py            # Visualization configuration and validation
-│   │   └── responder.py      # Response formatting and memory
-│   ├── tools/                # LangChain tools
-│   │   ├── simple_charts.py  # Bar, line, scatter, histogram tools
-│   │   └── complex_charts.py # Combo charts and dashboard tools
-│   ├── execution/            # Safe code execution
-│   │   ├── code_generator.py # LLM-based pandas code generation
-│   │   └── safe_executor.py  # Sandboxed execution with timeout
-│   ├── utils/                # Utility modules
-│   │   └── session_loader.py # Load DataFrames from Redis
-│   ├── prompts/              # LLM prompts
-│   │   └── system_prompts.py # Centralized prompts for all nodes
-│   └── INSIGHTBOT_IMPLEMENTATION.md  # Architecture documentation
+│   │   ├── router.py         # Intent, context resolution, clarification detection
+│   │   ├── clarification.py  # "Did you mean X or Y?" column disambiguation
+│   │   ├── analyzer.py       # Tool selection (function calling), correlation→heatmap
+│   │   ├── planner.py        # Multi-step query breakdown (complex queries)
+│   │   ├── insight.py        # Code generation, safe execution, summarization
+│   │   ├── viz.py            # Chart config validation, state only (Plotly in UI)
+│   │   ├── responder.py      # Response formatting, response_snapshots
+│   │   └── suggestion_engine.py  # Follow-up question chips
+│   ├── tools/                # LangChain @tool definitions (configs only)
+│   │   ├── data_tools.py     # insight_tool
+│   │   ├── simple_charts.py  # Bar, line, scatter, histogram, heatmap, correlation_matrix
+│   │   └── complex_charts.py # Combo and dashboard tools
+│   ├── execution/            # Code generation and safe execution
+│   │   ├── code_generator.py # LLM pandas code
+│   │   ├── code_validator.py # Forbidden ops, result variable
+│   │   ├── safe_executor.py  # Sandboxed execution, timeout, row limit
+│   │   └── rule_based_executor.py  # Simple queries (mean, sum, correlation) without LLM
+│   ├── utils/
+│   │   ├── session_loader.py # Load DataFrames and metadata from Redis
+│   │   ├── state_helpers.py # get_current_query(state) — shared query resolution
+│   │   ├── profile_formatter.py  # Data profile for prompts and chart validation
+│   │   └── chart_selector.py # Optional: rule-based chart suggestion (not in main graph)
+│   ├── prompts/              # Modular, versioned prompts (one per file)
+│   │   ├── base.py           # PromptTemplate, truncate_schema
+│   │   ├── router_prompt.py
+│   │   ├── analyzer_prompt.py
+│   │   ├── planner_prompt.py
+│   │   ├── code_generator_prompt.py
+│   │   ├── summarizer_prompt.py
+│   │   ├── responder_prompt.py
+│   │   └── ...               # suggestion, small_talk, context_resolver
+│   └── ui/                   # Streamlit UI components
+│       ├── message_history.py
+│       ├── chat_input.py
+│       └── chart_ui.py       # generate_chart_from_config_ui (Plotly from viz_config)
 │
 ├── redis_db/                  # Redis session management
 │   ├── __init__.py
@@ -933,53 +943,46 @@ Data-Assistant/
 
 ### 6. InsightBot Module (`chatbot/`)
 
-**Purpose**: Advanced LangGraph-powered conversational AI for data analysis with intelligent tool selection and visualization.
+**Purpose**: LangGraph-powered conversational AI for data analysis with context resolution, clarification, tool selection, safe code execution, and per-turn visualizations.
 
-**Architecture**: Multi-node state graph with persistent memory and dynamic tool routing.
+**Architecture**: State graph: router → (clarification | analyzer → planner → insight → viz | responder) → responder → suggestion → END. MemorySaver for persistence; response_snapshots so each AI message keeps its chart/table/code. DataFrames are not in state; loaded by `session_id` via `SessionLoader`.
 
 **Key Components**:
 
 **Nodes**:
-- `nodes/router.py`: Intent classification using structured LLM output
-- `nodes/analyzer.py`: Tool selection via function calling (insight_tool, chart_tools)
-- `nodes/insight.py`: Pandas code generation and safe execution
-- `nodes/viz.py`: Visualization configuration and validation
-- `nodes/responder.py`: Response formatting and memory persistence
+- `nodes/router.py`: Intent classification, follow-up detection, context resolution (effective_query), clarification detection (needs_clarification, clarification_options)
+- `nodes/clarification.py`: Emits "Did you mean X or Y?" when multiple columns match; resolution on next turn
+- `nodes/analyzer.py`: Tool selection via function calling (insight_tool, bar_chart, line_chart, heatmap, etc.); correlation→heatmap
+- `nodes/planner.py`: Multi-step query breakdown for complex queries
+- `nodes/insight.py`: Code generation, safe execution, summarization; handles summarize_last; sets error_suggestion (e.g. did_you_mean)
+- `nodes/viz.py`: Chart config validation and state storage (Plotly built in UI from viz_config); sets viz_error on failure
+- `nodes/responder.py`: Formats response; appends AIMessage and current snapshot to response_snapshots
+- `nodes/suggestion_engine.py`: Generates three follow-up questions for UI chips
 
 **Tools**:
-- `tools/simple_charts.py`: Bar, line, scatter, histogram chart tools
+- `tools/data_tools.py`: insight_tool for declarative analysis
+- `tools/simple_charts.py`: Bar, line, scatter, histogram, heatmap_chart, correlation_matrix
 - `tools/complex_charts.py`: Combo charts and dashboard tools
-- `tools/insight_tool.py`: Statistical analysis and data querying
 
 **Execution**:
-- `execution/code_generator.py`: LLM-based pandas code generation
-- `execution/safe_executor.py`: Sandboxed code execution with timeout
+- `execution/code_generator.py`: LLM pandas code (correlation numeric-only, filtering, groupby, etc.)
+- `execution/code_validator.py`: Forbidden ops, result variable enforcement
+- `execution/safe_executor.py`: Sandboxed execution with timeout and row limit
+- `execution/rule_based_executor.py`: Simple queries (mean, sum, correlation) without LLM
 
-**Utilities**:
-- `utils/session_loader.py`: Loads DataFrames and metadata from Redis
-- `prompts/system_prompts.py`: Centralized LLM prompts for all nodes
-- `state.py`: TypedDict schema for LangGraph state management
-- `graph.py`: StateGraph definition and compilation with MemorySaver
+**Utilities**: `utils/session_loader.py`, `utils/state_helpers.py` (get_current_query), `profile_formatter`; optional `chart_selector`. Prompts are modular in `prompts/` (get_*_prompt). See `chatbot/README.md` for full schema and flow; `chatbot/DEVELOPER.md` for how to extend.
 
 **Key Features**:
-- ✅ **Stateful Conversations**: LangGraph MemorySaver for persistent multi-turn memory
-- ✅ **Intent Classification**: Automatic routing between data queries, visualizations, and small talk
-- ✅ **Function Calling**: LLM dynamically selects appropriate tools based on query
-- ✅ **Safe Code Execution**: ThreadPoolExecutor-based timeout (10s) for pandas code
-- ✅ **Parameter Extraction**: Intelligent extraction of x_col, y_col, agg_func from queries
-- ✅ **Column Validation**: Verifies columns exist before chart generation
-- ✅ **Error Handling**: Graceful fallback when visualizations or insights fail
-- ✅ **Session Integration**: Seamless loading of DataFrames from Redis store
-- ✅ **Serialization**: Handles non-serializable objects (DataFrames, Plotly figures)
+- ✅ **Context-Aware Memory**: conversation_context, effective_query, context_resolver for follow-ups
+- ✅ **Clarification**: Column disambiguation with "Did you mean?" and resolution next turn
+- ✅ **Suggestion Engine**: Three contextual follow-up chips after each response
+- ✅ **Per-Turn Snapshots**: response_snapshots keep each message’s chart/table/code; previous visualizations don’t disappear
+- ✅ **Report & Summarize**: report intent and summarize_last (re-summarize previous result)
+- ✅ **Safe Code Execution**: Sandboxed pandas with timeout; correlation on numeric columns only
+- ✅ **Error Recovery**: did_you_mean suggestions; partial success (table when chart fails)
 
 **Supported Query Patterns**:
-- 📊 Statistical: "What's the average Price by Company?"
-- 📈 Comparative: "Compare average Weight by Cpu_brand"
-- 🔍 Filtering: "List all laptops with Price > 11.0 and Ram=16"
-- 📉 Distribution: "Show the distribution of Weight"
-- 🎯 Visualization: "Plot average Price by Company (bar chart)"
-- 🔗 Relationship: "Visualize Ram vs. Price relationship"
-- 📦 Breakdown: "Show breakdown of Os types as percentages"
+- 📊 Statistical, comparative, filtering, distribution, visualization, correlation, report, summarize_last, follow-ups
 
 ### 7. Streamlit Frontend (`app.py`)
 

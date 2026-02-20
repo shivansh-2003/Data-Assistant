@@ -9,9 +9,28 @@ from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
 
-from ..prompts import PROMPTS
+from ..constants import INTENT_DATA_QUERY, INTENT_SMALL_TALK
+from ..prompts import get_small_talk_prompt, get_responder_prompt
+from ..utils.state_helpers import get_current_query
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_tone(response_text: str, state: Dict) -> str:
+    """Adjust response text based on user_tone (technical, executive, explorer)."""
+    tone = (state.get("user_tone") or "explorer").lower().strip()
+    if tone == "technical" and state.get("generated_code"):
+        if "expander" not in response_text.lower() and "code" not in response_text.lower():
+            response_text = response_text.rstrip() + "\n\nYou can see how this was computed in the expander below."
+    elif tone == "executive":
+        # Keep to first 1–2 sentences for executive brevity
+        sentences = [s.strip() for s in response_text.replace("\n\n", ". ").split(". ") if s.strip()]
+        if len(sentences) > 2:
+            response_text = ". ".join(sentences[:2]) + ("." if not sentences[0].endswith(".") else "")
+    elif tone == "explorer" and state.get("last_insight") and not state.get("error"):
+        if "?" not in response_text[-50:] and len(response_text) < 400:
+            response_text = response_text.rstrip() + " Want to dig into a specific segment or compare something?"
+    return response_text
 
 
 @observe(name="chatbot_responder", as_type="chain")
@@ -27,17 +46,21 @@ def responder_node(state: Dict) -> Dict:
     """
     try:
         update_trace_context(session_id=state.get("session_id"), metadata={"node": "responder"})
-        intent = state.get("intent", "data_query")
-        messages = state.get("messages", [])
-        last_message = messages[-1]
-        query = last_message.content if hasattr(last_message, 'content') else str(last_message)
-        
-        # Handle small talk
-        if intent == "small_talk":
+        intent = state.get("intent", INTENT_DATA_QUERY)
+        query = get_current_query(state)
+
+        if intent == INTENT_SMALL_TALK:
             response_text = generate_small_talk_response(query)
-        # Handle critical errors (but not viz failures)
+        # Handle "did you mean" column suggestion
+        elif state.get("error_suggestion") and state["error_suggestion"].get("type") == "did_you_mean":
+            bad = state["error_suggestion"].get("bad_column", "that column")
+            sugs = state["error_suggestion"].get("suggested_columns", [])
+            if sugs:
+                response_text = f"Column '{bad}' not found. Did you mean: {', '.join(sugs)}?"
+            else:
+                response_text = f"I couldn't find column '{bad}'. Please check the column names and try again."
+        # Handle other critical errors (but not viz failures)
         elif state.get("error") and not state.get("last_insight"):
-            # Only show error if we have no insights to show
             response_text = f"I encountered an issue: {state['error']}. Could you try rephrasing your question?"
         # Handle data queries
         else:
@@ -47,19 +70,61 @@ def responder_node(state: Dict) -> Dict:
             # Check if visualization was successfully created
             has_viz = viz_config is not None
             
-            if insight and has_viz:
-                response_text = f"{insight}\n\nI've created a visualization to help illustrate this."
+            chart_reason = state.get("chart_reason")
+            viz_error = state.get("viz_error")
+            intent = state.get("intent", INTENT_DATA_QUERY)
+            format_hint = ""
+            if state.get("insight_data") and not has_viz:
+                format_hint = "Here's the table.\n\n"
+            elif has_viz and not viz_error:
+                format_hint = "Here's the chart and summary.\n\n" if insight else "Here's the chart.\n\n"
+            elif has_viz and viz_error and state.get("insight_data"):
+                format_hint = "Here's the summary and a table (chart had too many categories).\n\n"
+
+            if intent == "report" and insight:
+                bullets = [s.strip() for s in insight.replace(".", ". ").split(". ") if s.strip()][:3]
+                response_text = "**Report summary:**\n\n" + "\n".join(f"- {b}" for b in bullets if len(b) > 10)
+                if has_viz and not viz_error:
+                    response_text += "\n\nSee the chart below."
+                elif state.get("insight_data"):
+                    response_text += "\n\nSee the table below."
+            elif insight and has_viz and not viz_error:
+                response_text = format_hint + f"{insight}\n\nI've created a visualization to help illustrate this."
+                if chart_reason:
+                    response_text += f" ({chart_reason})"
+            elif insight and has_viz and viz_error:
+                response_text = format_hint + f"{insight}\n\n{viz_error}"
+                if state.get("insight_data"):
+                    response_text += " Here's the same data as a table above."
             elif insight:
-                # Have insight, no viz - that's fine!
-                response_text = insight
-            elif has_viz:
-                response_text = "Here's a visualization of your data based on your request."
+                response_text = format_hint + insight
+            elif has_viz and not viz_error:
+                response_text = format_hint + "Here's a visualization of your data based on your request."
+                if chart_reason:
+                    response_text += f" {chart_reason}"
+            elif has_viz and viz_error:
+                response_text = format_hint + viz_error
+                if state.get("insight_data"):
+                    response_text += " Here's a table view above."
             else:
                 # No insight or viz - generate generic response
                 response_text = format_fallback_response(query, state)
         
+        # Tone adaptation: adjust response style based on user_tone
+        response_text = _apply_tone(response_text, state)
+        
         # Add response to messages
         state["messages"].append(AIMessage(content=response_text))
+
+        # Append this turn's snapshot so the UI can show chart/table/code for this response (and keep previous ones)
+        snapshots = list(state.get("response_snapshots") or [])
+        snapshots.append({
+            "viz_config": state.get("viz_config"),
+            "insight_data": state.get("insight_data"),
+            "generated_code": state.get("generated_code"),
+            "viz_error": state.get("viz_error"),
+        })
+        state["response_snapshots"] = snapshots
         
         logger.info(f"Generated response ({len(response_text)} chars)")
         
@@ -84,7 +149,7 @@ def generate_small_talk_response(query: str) -> str:
         )
         
         response = llm.invoke([
-            SystemMessage(content=PROMPTS["small_talk"]),
+            SystemMessage(content=get_small_talk_prompt()),
             HumanMessage(content=query)
         ])
         
@@ -106,6 +171,7 @@ def format_fallback_response(query: str, state: Dict) -> str:
         
         schema = state.get("schema", {})
         
+        system_content = get_responder_prompt(query=query, insights="No analysis yet.", has_viz=False)
         prompt = f"""The user asked: {query}
 
 Session data schema: {schema}
@@ -113,7 +179,7 @@ Session data schema: {schema}
 Generate a helpful response acknowledging their question and suggesting how you could help analyze their data."""
         
         response = llm.invoke([
-            SystemMessage(content=PROMPTS["responder"]),
+            SystemMessage(content=system_content),
             HumanMessage(content=prompt)
         ])
         
