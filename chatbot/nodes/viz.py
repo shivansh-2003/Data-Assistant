@@ -51,9 +51,9 @@ MAX_BAR_CATEGORIES = 25
 MAX_PIE_CATEGORIES = 10
 
 
-def validate_viz_against_data(
-    chart_name: str, 
-    config: Dict, 
+def validate_data_compatibility(
+    chart_name: str,
+    config: Dict,
     df: pd.DataFrame,
     data_profile: Optional[Dict[str, Any]] = None,
     table_name: str = "current"
@@ -153,12 +153,10 @@ def validate_viz_against_data(
     return None
 
 
-def validate_viz_config(chart_name: str, config: Dict) -> Optional[str]:
+def validate_required_params(chart_name: str, config: Dict) -> Optional[str]:
     """
-    Validate visualization configuration has required parameters.
-    
-    Returns:
-        Error message if invalid, None if valid
+    Validate that tool args exist (required parameters for the chart type).
+    Returns an error message if invalid; None if valid.
     """
     if chart_name == TOOL_BAR_CHART:
         if not config.get("x_col"):
@@ -293,7 +291,7 @@ def viz_node(state: Dict) -> Dict:
                 return state
         
         # Validate required parameters
-        validation_error = validate_viz_config(chart_name, viz_config)
+        validation_error = validate_required_params(chart_name, viz_config)
         if validation_error:
             logger.warning(f"Invalid viz config: {validation_error}. Skipping visualization but continuing with insights.")
             # Don't set error - just skip viz, insights should still be shown
@@ -328,7 +326,7 @@ def viz_node(state: Dict) -> Dict:
 
         # Data-aware validation: cardinality and column types before calling generate_chart
         if df is not None and not df.empty:
-            data_error = validate_viz_against_data(chart_name, viz_config, df, data_profile, table_name)
+            data_error = validate_data_compatibility(chart_name, viz_config, df, data_profile, table_name)
             if data_error:
                 state["viz_error"] = data_error
                 sources = state.get("sources", [])

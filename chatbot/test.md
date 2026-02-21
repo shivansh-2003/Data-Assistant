@@ -534,22 +534,22 @@ class TestSafeExecutor:
 
 class TestVizValidation:
     def test_high_cardinality_bar_rejected(self):
-        from chatbot.nodes.viz import validate_viz_against_data
+        from chatbot.nodes.viz import validate_data_compatibility
         # Ppi has many unique values
         config = {"x_col": "Ppi", "y_col": "Price"}
-        error = validate_viz_against_data("bar_chart", config, df)
+        error = validate_data_compatibility("bar_chart", config, df)
         assert error is not None  # Should reject
 
     def test_low_cardinality_bar_accepted(self):
-        from chatbot.nodes.viz import validate_viz_against_data
+        from chatbot.nodes.viz import validate_data_compatibility
         config = {"x_col": "Company", "y_col": "Price"}
-        error = validate_viz_against_data("bar_chart", config, df)
+        error = validate_data_compatibility("bar_chart", config, df)
         assert error is None  # Should accept (Company has ~10 unique values)
 
     def test_scatter_requires_numeric(self):
-        from chatbot.nodes.viz import validate_viz_against_data
+        from chatbot.nodes.viz import validate_data_compatibility
         config = {"x_col": "Company", "y_col": "Price"}
-        error = validate_viz_against_data("scatter_chart", config, df)
+        error = validate_data_compatibility("scatter_chart", config, df)
         assert error is not None  # Company is not numeric
 
 class TestProfileFormatter:
