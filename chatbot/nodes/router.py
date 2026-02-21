@@ -1,10 +1,8 @@
 """Router node for intent classification."""
 
 import logging
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from typing import Dict, List, Optional
-import os
 from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
@@ -16,6 +14,7 @@ except ImportError:
     from langchain_core.pydantic_v1 import BaseModel, Field  # type: ignore
 
 from ..constants import INTENT_DATA_QUERY, INTENT_SMALL_TALK, INTENT_SUMMARIZE_LAST, TOOL_INSIGHT
+from ..llm_registry import get_router_llm, get_resolver_llm
 from ..prompts import get_router_prompt, get_context_resolver_prompt
 
 logger = logging.getLogger(__name__)
@@ -55,11 +54,7 @@ def _resolve_follow_up(user_message: str, conversation_context: Dict) -> Optiona
         last_insight_summary = conversation_context.get("last_insight_summary", "")
         if not last_query and not last_insight_summary:
             return None
-        llm = ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-            temperature=0.1,
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
+        llm = get_resolver_llm()
         prompt = get_context_resolver_prompt()
         context_str = f"Previous question: {last_query}\nPrevious answer summary: {last_insight_summary[:300]}"
         response = llm.invoke([
@@ -124,12 +119,7 @@ def router_node(state: Dict) -> Dict:
         )
         
         # Initialize LLM with structured output
-        llm = ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-            temperature=0.1,
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
-        
+        llm = get_router_llm()
         structured_llm = llm.with_structured_output(IntentClassification)
         
         # Classify intent

@@ -1,329 +1,328 @@
 # Data Visualization Module
 
-A comprehensive visualization module for the Data Assistant Platform that provides zero-latency chart generation, smart AI-powered recommendations, advanced chart compositions, and dynamic dashboard building capabilities.
+A comprehensive visualization module for the Data Assistant Platform providing multi-layer cached data fetching, figure memoization, lazy export generation, AI-powered chart recommendations, advanced chart compositions, and dynamic dashboard building.
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Features](#features)
 - [Module Structure](#module-structure)
-- [Installation](#installation)
+- [Caching Architecture](#caching-architecture)
 - [Quick Start](#quick-start)
 - [API Documentation](#api-documentation)
-- [Usage Examples](#usage-examples)
 - [Integration Guide](#integration-guide)
+- [Chart Types Reference](#chart-types-reference)
 
-## 🎯 Overview
+---
 
-The `data_visualization` module is a powerful visualization toolkit that enables users to:
+## Overview
 
-- **Generate charts instantly** with zero-latency using Plotly
-- **Get AI-powered recommendations** for optimal chart types based on data characteristics
-- **Create advanced compositions** with combo charts, small multiples, faceted views, and layered visualizations
-- **Build dynamic dashboards** with flexible grid layouts and chart pinning
-- **Export visualizations** in multiple formats (PNG, SVG, HTML)
+The `data_visualization` module powers the Visualization Centre tab in the Streamlit UI. It translates session DataFrames (fetched from the FastAPI backend) into interactive Plotly figures with export support, and complements InsightBot by rendering chart requests in chat responses.
 
-All visualizations are fully interactive, theme-aware, and automatically update with data manipulation changes.
+**Key design principles:**
+- **Multi-layer caching** eliminates redundant HTTP calls to the FastAPI backend on every Streamlit rerender.
+- **Figure memoization** caches generated Plotly figures by chart config hash — config unchanged = instant re-render, no spinner.
+- **Lazy export generation** — Kaleido (headless Chromium) is only invoked when the user explicitly clicks "Generate". Previously, `fig.to_image()` was called on every rerender, blocking for ~5s.
 
 ## Contribution to the Main Project
 
 - Powers the Visualization Centre tab in the Streamlit UI.
 - Translates session DataFrames into Plotly figures with export support.
 - Complements InsightBot by rendering chart requests in chat responses.
+- Cache invalidation (`cache_invalidation.py`) coordinates state between the Data Manipulation tab and the Visualization Centre so charts always reflect the latest data.
 
 ## Flow Diagram
 
 ```mermaid
 flowchart TD
-    A[User selects chart options] --> B[Load session DataFrame]
-    B --> C{Validate columns}
-    C -->|Invalid| D[Show validation error]
-    C -->|Valid| E{Aggregation needed?}
-    E -->|Yes| F[Group and aggregate]
-    E -->|No| G[Use raw data]
-    F --> H[Build Plotly figure]
-    G --> H
-    H --> I[Apply theme + layout]
+    A[User selects chart options] --> B{Config hash changed?}
+    B -->|No — cache hit| C[Render cached figure instantly ~0ms]
+    B -->|Yes — cache miss| D{Data in session_state hot cache?}
+    D -->|Hit ~0ms| E[Build Plotly figure]
+    D -->|Miss| F{Data in st.cache_data TTL cache?}
+    F -->|Hit ~5ms| E
+    F -->|Miss| G[Fetch from FastAPI ~500ms–2s]
+    G --> E
+    E --> H[Apply theme + layout]
+    H --> I[Cache figure by config hash]
     I --> J[Render in Streamlit]
-    J --> K{Export?}
-    K -->|PNG/SVG/HTML| L[Generate export file]
-    K -->|No| M[Done]
+    J --> K{Export requested?}
+    K -->|Generate button clicked| L[Kaleido: fig.to_image ~1–2s one time]
+    L --> M[Cache bytes by hash + format]
+    M --> N[Download button instant]
+    K -->|Already generated| N
+    K -->|No| O[Done]
 ```
 
-## ✨ Features
+---
 
-### 1. **Basic Chart Generation**
+## Features
+
+### 1. Basic Chart Generation
 - 8 chart types: Bar, Line, Scatter, Area, Box, Histogram, Pie, Heatmap
 - Smart column selection with automatic defaults
 - Aggregation support (sum, mean, count, min, max)
 - Theme-aware (light/dark mode support)
 - Real-time data integration from session storage
 
-### 2. **Smart Chart Recommendations** 🤖
+### 2. Multi-Layer Data Caching
+- **Layer 1 — `st.session_state` hot cache (~0ms):** Survives rerenders within a session. Tables list and per-table DataFrames stored on first fetch.
+- **Layer 2 — `@st.cache_data(ttl=30)` (~5ms on hit):** Process-level TTL cache keyed by `(session_id, cache_version)`. Cache-busted by incrementing `cache_version` on data changes.
+- **Layer 3 — FastAPI (~500ms–2s):** Called only on true miss (first load or after cache bust).
+
+### 3. Figure Memoization
+All chart configuration inputs (type, columns, aggregation, palette, etc.) are hashed into an MD5 key. Up to 10 generated figures are stored in `st.session_state`. A cache hit renders instantly with no spinner. A cache miss shows a spinner on first generation only.
+
+### 4. Lazy Export Generation
+Export buttons in the Visualization Centre use a two-stage flow:
+- **Stage 1 — "Generate PNG/SVG/PDF" button:** Triggers a single `fig.to_image()` call (via Kaleido, ~1–2s). The resulting bytes are cached in `st.session_state` by `(config_hash, format)`.
+- **Stage 2 — "Download" button:** Instant; bytes served from cache.
+- HTML, Python script, and notebook exports are always instant (no Kaleido).
+- PPTX reuses the cached PNG bytes.
+
+### 5. Smart Chart Recommendations
 - AI-powered analysis using LangChain and OpenAI
 - Analyzes data distribution, cardinality, correlations, and patterns
-- Provides 3-5 ranked recommendations with reasoning
+- Provides ranked recommendations with reasoning
 - One-click application of recommendations
 - Fallback to rule-based recommendations if AI unavailable
 
-### 3. **Custom Chart Compositions** 🎨
+### 6. Custom Chart Compositions
 - **Combo Charts**: Dual y-axes combining different chart types (bar + line, scatter + area, etc.)
-- **Small Multiples**: Grid of charts faceted by category (up to 12 panels)
-- **Faceted Charts**: Automatic subplot creation (up to 4x4 grid) based on grouping
-- **Layered Visualizations**: Multiple traces with adjustable opacity/transparency
+- **Heatmaps**: Correlation matrices with configurable column selection
+- **Faceted Charts**: Automatic subplot creation based on grouping
 
-### 4. **Dynamic Dashboard Builder** 📊
-- Flexible grid layouts (2x2, 3x3, 2x3, 1x2, etc.)
+### 7. Dynamic Dashboard Builder
+- Flexible grid layouts (2×2, 3×3, 2×3, 1×2, etc.)
 - Chart pinning system for multi-view analysis
-- Drag-and-drop style arrangement
 - Individual chart management (remove, view info)
 - State persistence across sessions
 
-### 5. **Export Capabilities** 📥
-- PNG export (static images)
-- SVG export (vector graphics)
-- HTML export (interactive charts)
-- Automatic sizing for composition charts
+### 8. Cache Invalidation
+`cache_invalidation.py` provides cross-tab coordination. The Data Manipulation tab calls `on_data_changed()` after every successful operation:
+- Bumps the `cache_version` counter → invalidates all `@st.cache_data` TTL caches
+- Clears the `st.session_state` hot cache (tables list, per-table DataFrames)
+- Clears the figure memoization cache
+- Clears the export byte cache
+- All subsequent visualization renders fetch fresh data from FastAPI
 
-## 📁 Module Structure
+---
+
+## Module Structure
 
 ```
 data_visualization/
-├── __init__.py                 # Module exports and initialization
-├── visualization.py            # Core visualization tab and chart generation
-├── smart_recommendations.py    # AI-powered chart recommendations
-├── chart_compositions.py        # Advanced chart composition functions
-├── dashboard_builder.py         # Dynamic dashboard builder
-└── README.md                   # This file
+├── __init__.py                    # Public API exports
+├── visualization.py               # Visualization Centre tab, figure memoization
+├── cache_invalidation.py          # Cross-tab cache coordination (on_data_changed)
+├── dashboard_builder.py           # Dashboard state management and multi-chart rendering
+├── utils.py                       # Shared helpers (column validation, theming, config)
+│
+├── core/
+│   ├── __init__.py
+│   ├── data_fetcher.py            # Multi-layer cached data fetching from FastAPI
+│   ├── chart_generator.py         # Plotly figure construction
+│   └── validators.py              # Column and config validation
+│
+├── charts/
+│   ├── __init__.py
+│   ├── basic.py                   # Bar, line, scatter, area, box, histogram, pie
+│   ├── heatmap.py                 # Heatmap and correlation matrix
+│   └── combo.py                   # Dual-axis combo charts
+│
+├── ui/
+│   ├── __init__.py
+│   ├── controls.py                # Chart control widgets (type, columns, aggregation)
+│   ├── dashboard.py               # Dashboard UI rendering
+│   ├── export.py                  # Lazy export buttons (PNG/SVG/PDF/HTML/PPTX)
+│   └── recommendations.py         # AI recommendation display
+│
+└── intelligence/
+    ├── __init__.py
+    └── recommender.py             # LLM-based chart type recommendations
 ```
 
-## File Details
-- `__init__.py`: Exposes the main public API functions used by `app.py`.
-- `visualization.py`: Renders the Visualization Centre UI, validates user
-  selections, and generates Plotly figures from session data.
-- `smart_recommendations.py`: Builds chart recommendations using LLMs or
-  fallback heuristics when AI is unavailable.
-- `chart_compositions.py`: Implements advanced chart types like combo,
-  faceted, layered, and small-multiples charts.
-- `dashboard_builder.py`: Manages dashboard layout state, pinning, and
-  multi-chart rendering in Streamlit.
-- `utils.py`: Shared helpers for column validation, theming, and config
-  normalization.
+### File Responsibilities
 
-## 📦 Installation
+| File | Responsibility |
+|------|----------------|
+| `__init__.py` | Exposes `render_visualization_tab`, `get_dataframe_from_session`, `get_tables_from_session`, `invalidate_viz_cache`, `on_data_changed` |
+| `visualization.py` | Renders the Visualization Centre UI; computes config hash; checks figure cache before generating; passes `cfg_hash` to export section |
+| `cache_invalidation.py` | `on_data_changed()` — bumps cache version, clears all hot caches and figure/export caches |
+| `core/data_fetcher.py` | `get_tables_from_session()` and `get_dataframe_from_session()` — three-layer cache logic |
+| `core/chart_generator.py` | Constructs Plotly figures from validated config + DataFrame |
+| `core/validators.py` | Column existence checks, type validation, cardinality guards |
+| `charts/basic.py` | Plotly Express wrappers for the 7 basic chart types |
+| `charts/heatmap.py` | Heatmap and correlation matrix generation |
+| `charts/combo.py` | Dual-axis combo chart with mixed chart types |
+| `ui/controls.py` | Streamlit widgets for chart type, column, and aggregation selection |
+| `ui/export.py` | Two-stage lazy export: "Generate" button → Kaleido → cache → "Download" button |
+| `ui/recommendations.py` | Renders AI recommendation cards with one-click apply |
+| `intelligence/recommender.py` | LLM + rule-based chart recommendations from data profile |
+| `dashboard_builder.py` | Dashboard grid state, chart pinning, grid rendering |
 
-The module requires the following dependencies (already included in main `requirements.txt`):
+---
 
-- streamlit>=1.28.0
-- plotly>=5.17.0
-- pandas>=2.1.3
-- numpy>=1.24.0
-- langchain-openai>=0.0.5
-- kaleido>=0.2.1 (for static image exports)
+## Caching Architecture
 
-## 🚀 Quick Start
+### Data Cache (core/data_fetcher.py)
 
-### Basic Usage
+```python
+# Layer 1: session_state hot cache — 0ms, within-session
+st.session_state["_viz_tables_cache"][session_id]
+st.session_state["_viz_df_cache"][(session_id, table_name)]
 
-Import `render_visualization_tab()` in `app.py` and call it inside the
-Visualization tab to render the full UI.
+# Layer 2: st.cache_data TTL — ~5ms on hit, process-level
+@st.cache_data(ttl=30, show_spinner=False)
+def _fetch_tables_from_api(session_id, cache_version): ...
 
-### Generate a Chart Programmatically
+@st.cache_data(ttl=30, show_spinner=False)
+def _build_dataframe(session_id, table_name, cache_version): ...
 
-Use `generate_chart()` to build a Plotly figure from a DataFrame by passing
-the chart type and column mappings.
+# Layer 3: FastAPI — only on true miss
+requests.get(f"{SESSION_ENDPOINT}/{session_id}/tables")
+```
 
-### Get Smart Recommendations
+### Figure Cache (visualization.py)
 
-Use `get_chart_recommendations()` to receive ranked chart suggestions based
-on the DataFrame and an optional user query.
+```python
+# MD5 hash of all chart config inputs
+cfg_hash = _chart_config_hash(
+    chart_type, x_col, y_col, agg_func, color_col, palette, ...
+)
 
-## 📚 API Documentation
+# Check cache before generating
+fig_cache = st.session_state.get("_viz_fig_cache", {})
+if cfg_hash in fig_cache:
+    st.plotly_chart(fig_cache[cfg_hash])   # instant, no spinner
+else:
+    with st.spinner("Generating chart..."):
+        fig = generate_chart(...)
+    fig_cache[cfg_hash] = fig              # cache for next render
+```
 
-### Core Functions
+### Export Cache (ui/export.py)
+
+```python
+# Bytes cached by (config_hash, format) — Kaleido only runs once per chart+format
+_export_cache = st.session_state.get("viz_export_cache", {})
+cached_bytes = _export_cache.get((cfg_hash, "png"))
+
+if cached_bytes:
+    st.download_button(...)    # instant
+else:
+    if st.button("Generate PNG"):
+        data = fig.to_image(format="png")   # ~1–2s, Kaleido
+        _export_cache[(cfg_hash, "png")] = data
+        st.rerun()
+```
+
+### Cache Invalidation (cache_invalidation.py)
+
+Called from `app.py` after every successful data manipulation:
+```python
+from data_visualization.cache_invalidation import on_data_changed
+
+if result.get("success"):
+    on_data_changed()   # bumps version, clears all caches
+    st.rerun()
+```
+
+---
+
+## Quick Start
+
+### Rendering the Visualization Tab
+
+```python
+from data_visualization import render_visualization_tab
+render_visualization_tab()  # inside the Visualization Centre tab in app.py
+```
+
+### Fetching Session Data
+
+```python
+from data_visualization import get_dataframe_from_session, get_tables_from_session
+
+tables = get_tables_from_session(session_id)       # cached, dict
+df = get_dataframe_from_session(session_id, "sales")  # cached, DataFrame
+```
+
+### Invalidating Caches After Data Changes
+
+```python
+from data_visualization.cache_invalidation import on_data_changed
+on_data_changed()   # call after any successful data manipulation
+```
+
+---
+
+## API Documentation
+
+### Core Public Functions
 
 #### `render_visualization_tab()`
-Main function to render the complete visualization tab in Streamlit.
+Render the complete Visualization Centre tab in Streamlit.
 
-**Returns:** None (renders UI directly)
+#### `get_tables_from_session(session_id) → Optional[Dict[str, Any]]`
+Fetch the tables dictionary from session storage using the three-layer cache.
 
-#### `generate_chart(df, chart_type, x_col, y_col, agg_func='none', color_col=None)`
-Generate a basic Plotly chart.
+#### `get_dataframe_from_session(session_id, table_name) → Optional[pd.DataFrame]`
+Fetch a specific table as a DataFrame using the three-layer cache.
 
-**Parameters:**
-- `df` (pd.DataFrame): Data to visualize
-- `chart_type` (str): Chart type ('bar', 'line', 'scatter', 'area', 'box', 'histogram', 'pie', 'heatmap')
-- `x_col` (str, optional): X-axis column name
-- `y_col` (str, optional): Y-axis column name
-- `agg_func` (str): Aggregation function ('none', 'sum', 'mean', 'count', 'min', 'max')
-- `color_col` (str, optional): Column for color/grouping
+#### `invalidate_viz_cache()`
+Bump the cache version and clear all session_state hot caches. Used internally; prefer `on_data_changed()` from outside the module.
 
-**Returns:** `plotly.graph_objects.Figure`
+#### `on_data_changed()`
+Full cache invalidation: bumps version, clears hot caches, clears figure cache, clears export byte cache. Call this from the Data Manipulation tab after any successful operation.
 
-#### `get_dataframe_from_session(session_id, table_name)`
-Fetch DataFrame from session storage.
+### Chart Generation
 
-**Parameters:**
-- `session_id` (str): Session identifier
-- `table_name` (str): Name of the table to fetch
-
-**Returns:** `pd.DataFrame` or `None`
-
-### Smart Recommendations
-
-#### `get_chart_recommendations(df, user_query=None)`
-Get AI-powered chart recommendations.
+#### `generate_chart(df, chart_type, x_col, y_col, agg_func='none', color_col=None) → Figure`
+Generate a Plotly figure from a DataFrame.
 
 **Parameters:**
-- `df` (pd.DataFrame): Data to analyze
-- `user_query` (str, optional): User's visualization goal
-
-**Returns:** `List[Dict[str, Any]]` - List of recommendation dictionaries with:
-- `chart_type`: Recommended chart type
-- `x_column`: Suggested X-axis column
-- `y_column`: Suggested Y-axis column
-- `relevance`: Relevance score (1-5, lower is better)
-- `reasoning`: Explanation for the recommendation
-
-### Chart Compositions
-
-#### `generate_combo_chart(df, x_col, y1_col, y2_col, chart1_type='bar', chart2_type='line', color_col=None)`
-Generate combo chart with dual y-axes.
-
-**Parameters:**
-- `df` (pd.DataFrame): Data to visualize
-- `x_col` (str): X-axis column
-- `y1_col` (str): First Y-axis column (left)
-- `y2_col` (str): Second Y-axis column (right)
-- `chart1_type` (str): Type for first chart ('bar', 'line', 'scatter', 'area')
-- `chart2_type` (str): Type for second chart ('bar', 'line', 'scatter', 'area')
-- `color_col` (str, optional): Color/grouping column
-
-**Returns:** `plotly.graph_objects.Figure`
-
-#### `generate_small_multiples(df, x_col, y_col, facet_col, chart_type='bar', max_facets=12)`
-Generate small multiples (grid of charts).
-
-**Parameters:**
-- `df` (pd.DataFrame): Data to visualize
-- `x_col` (str): X-axis column
-- `y_col` (str): Y-axis column
-- `facet_col` (str): Column to facet by
-- `chart_type` (str): Base chart type ('bar', 'line', 'scatter', 'histogram')
-- `max_facets` (int): Maximum number of facets to show
-
-**Returns:** `plotly.graph_objects.Figure`
-
-#### `generate_faceted_chart(df, x_col, y_col, facet_col, chart_type='scatter', max_facets=16)`
-Generate faceted chart with automatic subplot creation.
-
-**Parameters:**
-- `df` (pd.DataFrame): Data to visualize
-- `x_col` (str): X-axis column
-- `y_col` (str): Y-axis column
-- `facet_col` (str): Column to facet by
-- `chart_type` (str): Chart type ('scatter', 'bar', 'line', 'box')
-- `max_facets` (int): Maximum facets (up to 4x4 grid)
-
-**Returns:** `plotly.graph_objects.Figure`
-
-#### `generate_layered_chart(df, x_col, y_cols, layer_types, opacity=0.7, color_col=None)`
-Generate layered visualization with multiple traces.
-
-**Parameters:**
-- `df` (pd.DataFrame): Data to visualize
-- `x_col` (str): X-axis column
-- `y_cols` (List[str]): List of Y-axis columns to layer
-- `layer_types` (List[str]): Chart types for each layer
-- `opacity` (float): Opacity level (0-1)
-- `color_col` (str, optional): Color/grouping column
+- `df` — DataFrame to visualize
+- `chart_type` — `'bar'`, `'line'`, `'scatter'`, `'area'`, `'box'`, `'histogram'`, `'pie'`, `'heatmap'`
+- `x_col` — X-axis column name
+- `y_col` — Y-axis column name
+- `agg_func` — `'none'`, `'sum'`, `'mean'`, `'count'`, `'min'`, `'max'`
+- `color_col` — Column for color/grouping (optional)
 
 **Returns:** `plotly.graph_objects.Figure`
 
 ### Dashboard Builder
 
-#### `initialize_dashboard_state()`
-Initialize dashboard state variables in Streamlit session state.
-
-**Returns:** None
-
-#### `pin_chart_to_dashboard(chart_config, position=None)`
-Pin a chart configuration to the dashboard.
-
-**Parameters:**
-- `chart_config` (Dict[str, Any]): Chart configuration dictionary
-- `position` (int, optional): Position index (None = append)
-
-**Returns:** `bool` - True if successful
-
-#### `render_dashboard_tab(df, selected_table)`
+#### `render_dashboard_tab(df, selected_table) → bool`
 Render the dashboard builder interface.
 
-**Parameters:**
-- `df` (pd.DataFrame): Data to visualize
-- `selected_table` (str): Name of the selected table
+#### `pin_chart_to_dashboard(chart_config, position=None) → bool`
+Pin a chart configuration to the dashboard.
 
-**Returns:** `bool` - Dashboard active status
+---
 
-#### `get_current_chart_config(chart_mode, chart_type, x_col, y_col, agg_func, color_col, composition_params)`
-Get current chart configuration for pinning.
-
-**Parameters:**
-- `chart_mode` (str): Chart mode ('basic', 'combo', 'small_multiples', 'faceted', 'layered')
-- `chart_type` (str): Chart type
-- `x_col` (str): X column
-- `y_col` (str): Y column
-- `agg_func` (str): Aggregation function
-- `color_col` (str, optional): Color column
-- `composition_params` (Dict): Composition-specific parameters
-
-**Returns:** `Dict[str, Any]` - Configuration dictionary
-
-## 💡 Usage Examples
-
-### Example 1: Basic Bar Chart
-Generate a bar chart using `generate_chart()` by mapping a categorical
-column to X and a numeric column to Y.
-
-### Example 2: Combo Chart (Bar + Line)
-Create a dual-axis combo chart with `generate_combo_chart()` to compare
-two metrics over the same X axis.
-
-### Example 3: Small Multiples
-Use `generate_small_multiples()` to create a faceted grid grouped by a
-categorical column.
-
-### Example 4: Get Recommendations
-Request recommendations by passing the DataFrame and a short visualization
-goal; the module ranks chart types with reasoning.
-
-### Example 5: Dashboard Building
-Initialize dashboard state, generate a chart configuration, and pin it so
-multiple charts can be managed in one layout.
-
-## 🔗 Integration Guide
-
-### Integration with Streamlit App
-
-The module is designed to integrate seamlessly with the main Streamlit application:
-Import `render_visualization_tab()` and call it inside the Visualization tab
-section of `app.py`.
-
-### Session Data Integration
-
-The module automatically fetches data from the session storage:
-Call `get_dataframe_from_session(session_id, table_name)` to retrieve a
-DataFrame for visualization.
+## Integration Guide
 
 ### Environment Variables
 
-The module uses the following environment variables:
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `FASTAPI_URL` | FastAPI backend URL | `http://localhost:8001` |
+| `OPENAI_API_KEY` | OpenAI key for smart recommendations | — |
+| `OPENAI_MODEL` | Model for recommendations | `gpt-4o` |
 
-- `FASTAPI_URL`: FastAPI backend URL (default: `http://localhost:8001`)
-- `OPENAI_API_KEY`: OpenAI API key for smart recommendations
-- `OPENAI_MODEL`: OpenAI model to use (default: `gpt-4o`)
+### Cache Tuning
 
-## 🎨 Chart Types Reference
+Default TTL is 30 seconds. Adjust in `core/data_fetcher.py`:
+```python
+@st.cache_data(ttl=30, show_spinner=False)   # change ttl as needed
+```
+
+The `cache_version` counter in `st.session_state` ensures that `on_data_changed()` busts the TTL cache immediately regardless of the TTL setting.
+
+---
+
+## Chart Types Reference
 
 ### Basic Charts
 
@@ -343,52 +342,21 @@ The module uses the following environment variables:
 | Composition | Best For | Key Features |
 |-------------|----------|--------------|
 | Combo | Comparing different metrics | Dual y-axes, mixed chart types |
-| Small Multiples | Comparing across categories | Grid layout, consistent scales |
-| Faceted | Deep categorical analysis | Automatic subplots, shared legends |
-| Layered | Overlaying multiple series | Transparency controls, blending |
-
-## 🛠️ Advanced Features
-
-### Theme Detection
-
-Charts automatically adapt to Streamlit's theme:
-The module selects the appropriate Plotly template (`plotly_dark` or
-`plotly_white`) based on the current Streamlit theme.
-
-### Aggregation Support
-
-Apply aggregations directly in chart generation:
-Set `agg_func` to apply grouping and aggregation during chart generation.
-
-### Export Options
-
-All charts support multiple export formats:
-Use Plotly export helpers to generate PNG, SVG, or HTML output.
-
-## 📝 Notes
-
-- **Performance**: Charts are generated with zero latency using Plotly's efficient rendering
-- **Interactivity**: All charts support zoom, pan, hover, and selection
-- **Data Updates**: Charts automatically reflect changes from data manipulation operations
-- **Session Persistence**: Dashboard state persists across page refreshes
-- **Error Handling**: Graceful fallbacks for missing data or invalid configurations
-
-## 🤝 Contributing
-
-When adding new features:
-
-1. Follow the existing module structure
-2. Add type hints to all functions
-3. Include docstrings with parameter descriptions
-4. Update this README with new features
-5. Ensure compatibility with existing chart types
-
-## 📄 License
-
-Part of the Data Assistant Platform project.
+| Heatmap / Correlation Matrix | Numeric relationships | Auto numeric-column selection |
 
 ---
 
-**Last Updated:** 2024
-**Version:** 1.0.0
+## Performance Notes
 
+| Operation | Latency (before caching) | Latency (after caching) |
+|-----------|--------------------------|------------------------|
+| Tables list fetch | ~500ms–2s (API call every rerender) | ~0ms (hot cache hit) |
+| DataFrame fetch | ~500ms–2s (API call every rerender) | ~0ms (hot cache hit) |
+| Chart generation (same config) | ~80–200ms (Plotly, every rerender) | ~0ms (figure cache hit) |
+| PNG/SVG export (on render) | ~5–6s (Kaleido × 3 formats, blocking) | ~0ms (lazy, only on click) |
+| PNG/SVG export (after generate) | N/A | ~0ms (bytes cached) |
+
+---
+
+**Last Updated:** February 2026
+**Version:** 2.0.0

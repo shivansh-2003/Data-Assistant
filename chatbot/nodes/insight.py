@@ -2,15 +2,14 @@
 
 import logging
 from typing import Dict, Any
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-import os
 import json
 from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
 
 from ..constants import INTENT_SUMMARIZE_LAST, TOOL_INSIGHT
+from ..llm_registry import get_summarizer_llm
 from ..prompts import get_summarizer_prompt
 from ..execution import generate_pandas_code, execute_pandas_code
 from ..execution.rule_based_executor import try_rule_based_execution
@@ -217,13 +216,9 @@ def summarize_insight(query: str, output: any) -> str:
             output=output_str
         )
         
-        # Initialize LLM
-        llm = ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-            temperature=0.3,
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
-        
+        # Initialize LLM — gpt-4o-mini is sufficient for paraphrasing results
+        llm = get_summarizer_llm()
+
         # Generate summary
         response = llm.invoke([
             SystemMessage(content=system_prompt),
