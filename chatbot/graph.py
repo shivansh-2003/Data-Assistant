@@ -22,8 +22,20 @@ from .nodes import (
     clarification_node
 )
 from .nodes.analyzer import route_after_analyzer
+from .utils.state_helpers import get_current_query
 
 logger = logging.getLogger(__name__)
+
+# Queries containing these phrases are structurally complex and warrant the planner
+_COMPLEX_KEYWORDS = frozenset({
+    "year over year", "yoy", "year-over-year",
+    "month over month", "mom", "month-over-month",
+    "rolling average", "rolling mean", "moving average",
+    "cumulative", "running total", "waterfall",
+    "percentile", "quartile", "decile",
+    "cohort", "funnel", "retention",
+})
+_COMPLEX_SUB_INTENTS = frozenset({"trend", "correlate", "report"})
 
 # Create the graph
 workflow = StateGraph(State)
@@ -69,12 +81,25 @@ workflow.add_edge("clarification", END)
 
 # Add conditional edges from analyzer
 def route_after_analyzer_with_planning(state: dict) -> str:
-    """Route from analyzer: if insight tool selected, go to planner first, else route normally."""
+    """Route from analyzer: send to planner only for genuinely complex queries (~20%).
+
+    Simple queries (avg, sum, count, filter, groupby, most comparisons) skip the
+    planner entirely, saving ~2s per query. Complex queries (YoY, cohort, rolling,
+    trend, long multi-step) still go through the full planner path.
+    """
     route = route_after_analyzer(state)
-    if route == "insight":
-        # Check if planning is needed (will be determined in planner node)
-        return "planner"
-    return route
+    if route != "insight":
+        return route
+
+    query = get_current_query(state).lower()
+    sub_intent = (state.get("sub_intent") or "general").lower()
+
+    is_complex = (
+        any(kw in query for kw in _COMPLEX_KEYWORDS)
+        or sub_intent in _COMPLEX_SUB_INTENTS
+        or len(query.split()) > 25
+    )
+    return "planner" if is_complex else "insight"
 
 workflow.add_conditional_edges(
     "analyzer",

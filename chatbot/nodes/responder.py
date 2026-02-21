@@ -2,14 +2,13 @@
 
 import logging
 from typing import Dict
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-import os
 from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
 
 from ..constants import INTENT_DATA_QUERY, INTENT_SMALL_TALK
+from ..llm_registry import get_small_talk_llm, get_responder_llm
 from ..prompts import get_small_talk_prompt, get_responder_prompt
 from ..utils.state_helpers import get_current_query
 
@@ -142,11 +141,7 @@ def responder_node(state: Dict) -> Dict:
 def generate_small_talk_response(query: str) -> str:
     """Generate response for small talk."""
     try:
-        llm = ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-            temperature=0.7,
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
+        llm = get_small_talk_llm()
         
         response = llm.invoke([
             SystemMessage(content=get_small_talk_prompt()),
@@ -163,11 +158,7 @@ def generate_small_talk_response(query: str) -> str:
 def format_fallback_response(query: str, state: Dict) -> str:
     """Format fallback response when no insight or viz available."""
     try:
-        llm = ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-            temperature=0.3,
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
+        llm = get_responder_llm()
         
         schema = state.get("schema", {})
         

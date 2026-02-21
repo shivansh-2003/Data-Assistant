@@ -99,12 +99,11 @@ class DashboardBuilder:
         Returns:
             Plotly figure
         """
-        # Import here to avoid circular imports
-        from .visualization import generate_chart
-        from .chart_compositions import generate_combo_chart
-        
+        from .core.chart_generator import generate_chart
+        from .charts.combo import generate_combo_chart
+
         chart_mode = config.get('mode', 'basic')
-        
+
         if chart_mode == 'basic':
             return generate_chart(
                 df,
@@ -113,7 +112,9 @@ class DashboardBuilder:
                 config.get('y_col'),
                 config.get('agg_func', 'none'),
                 config.get('color_col'),
-                config.get('heatmap_columns')  # Support multi-column heatmaps
+                config.get('heatmap_columns'),
+                None,
+                None
             )
         elif chart_mode == 'combo':
             return generate_combo_chart(
@@ -125,20 +126,18 @@ class DashboardBuilder:
                 config.get('chart2_type', 'line'),
                 config.get('color_col')
             )
-        elif chart_mode in ['small_multiples', 'faceted', 'layered']:
-            # These chart types are no longer supported
-            # Fallback to basic chart
+        else:
             return generate_chart(
                 df,
                 config.get('chart_type', 'bar'),
                 config.get('x_col'),
                 config.get('y_col'),
                 config.get('agg_func', 'none'),
-                config.get('color_col')
+                config.get('color_col'),
+                config.get('heatmap_columns'),
+                None,
+                None
             )
-        else:
-            # Fallback
-            return generate_chart(df, 'bar', config.get('x_col'), config.get('y_col'))
     
     def render_tab(self, df: pd.DataFrame, selected_table: str) -> bool:
         """
