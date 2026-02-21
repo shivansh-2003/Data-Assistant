@@ -18,6 +18,7 @@ import base64
 import pickle
 from datetime import datetime
 from data_visualization import render_visualization_tab
+from data_visualization.cache_invalidation import on_data_changed
 from chatbot.streamlit_ui import render_chatbot_tab
 from components.data_table import render_advanced_table
 from components.empty_state import render_empty_state
@@ -53,7 +54,7 @@ SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 # MCP Configuration
 MCP_SERVER_URL = "https://data-assistant-84sf.onrender.com/data/mcp"
 OPENAI_API_KEY = get_secret("openai.api_key", "OPENAI_API_KEY")
-OPENAI_MODEL = "gpt-5.1"  # Fallback to gpt-4o if not specified
+OPENAI_MODEL = get_secret("openai.model", "OPENAI_MODEL", "gpt-4o")
 
 # Page configuration
 st.set_page_config(
@@ -606,15 +607,12 @@ def analyze_data_sync(session_id: str, query: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+@st.cache_data(ttl=30, show_spinner=False)
 def get_session_tables_for_display(session_id: str) -> Optional[Dict]:
     """
     Fetch current tables from session for display.
-    
-    Args:
-        session_id: Session ID to fetch tables for
-        
-    Returns:
-        Dict with session data or None if error
+    Cached for 30s so the sidebar and manipulation tab don't hit the API
+    on every Streamlit rerender.
     """
     try:
         response = requests.get(
@@ -625,19 +623,15 @@ def get_session_tables_for_display(session_id: str) -> Optional[Dict]:
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching session tables: {e}")
         return None
 
 
+@st.cache_data(ttl=30, show_spinner=False)
 def get_session_metadata_for_display(session_id: str) -> Optional[Dict]:
     """
     Fetch session metadata.
-    
-    Args:
-        session_id: Session ID to fetch metadata for
-        
-    Returns:
-        Dict with metadata or None if error
+    Cached for 30s — the sidebar calls this on every page render, so without
+    caching it would add a round-trip to Render.com on every widget interaction.
     """
     try:
         response = requests.get(
@@ -1080,6 +1074,16 @@ def render_upload_tab():
     card_close()
 
 
+@st.cache_data(ttl=15, show_spinner=False)
+def _fetch_version_graph(session_id: str) -> dict:
+    """Cached fetch of the version history graph. TTL=15s for near-realtime feel."""
+    response = requests.get(
+        f"{FASTAPI_URL}/api/session/{session_id}/versions", timeout=5
+    )
+    response.raise_for_status()
+    return response.json().get("graph", {"nodes": [], "edges": []})
+
+
 def render_manipulation_tab():
     """Render the Data Manipulation tab content."""
     st.markdown(
@@ -1135,11 +1139,15 @@ def render_manipulation_tab():
             del st.query_params["sid"]
         return
     
-    # Extend session TTL on access
-    try:
-        requests.post(f"{SESSION_ENDPOINT}/{session_id}/extend", timeout=5)
-    except:
-        pass  # Non-critical, continue anyway
+    # Extend session TTL on access — throttled to once per minute to avoid
+    # an extra HTTP call on every widget interaction within the tab.
+    _extend_key = f"_last_extend_{session_id}"
+    if time.time() - st.session_state.get(_extend_key, 0) > 60:
+        try:
+            requests.post(f"{SESSION_ENDPOINT}/{session_id}/extend", timeout=5)
+        except:
+            pass
+        st.session_state[_extend_key] = time.time()
     
     # Session Info Card
     card_open("card-elevated")
@@ -1227,9 +1235,7 @@ def render_manipulation_tab():
         return {"nodes": nodes_sorted, "edges": edges_filtered}
     
     try:
-        response = requests.get(f"{FASTAPI_URL}/api/session/{session_id}/versions", timeout=5)
-        response.raise_for_status()
-        graph_data = response.json().get("graph", {"nodes": [], "edges": []})
+        graph_data = _fetch_version_graph(session_id)
     except Exception:
         graph_data = {"nodes": [], "edges": []}
     
@@ -1517,29 +1523,26 @@ def render_manipulation_tab():
                 result = analyze_data_sync(session_id, query)
                 
                 if result.get("success"):
-                    # Wait a bit for MCP server to update Redis
-                    time.sleep(2)  # Increased wait time for Redis update
                     progress.progress(0.7, text="Updating session state")
-                    
-                    # Verify the update was successful by checking if data changed
-                    new_tables_data = get_session_tables_for_display(session_id)
-                    if not new_tables_data:
-                        st.warning("⚠️ Could not verify data update. Please refresh manually.")
-                    
+
+                    # Bust all app-level caches so the next render shows fresh data
+                    on_data_changed()
+                    get_session_metadata_for_display.clear()
+                    get_session_tables_for_display.clear()
+                    get_full_table_dataframe.clear()
+                    _fetch_version_graph.clear()
+
                     # Create new version after successful operation
                     try:
                         # Get current version from metadata
                         current_metadata = get_session_metadata_for_display(session_id)
                         current_vid = current_metadata.get("current_version", "v0") if current_metadata else "v0"
-                        
+
                         # Get graph to determine next version number
-                        graph_response = requests.get(f"{FASTAPI_URL}/api/session/{session_id}/versions", timeout=5)
-                        if graph_response.status_code == 200:
-                            graph_data = graph_response.json().get("graph", {"nodes": []})
-                            # Generate new version ID
+                        try:
+                            graph_data = _fetch_version_graph(session_id)
                             new_vid = f"v{len(graph_data.get('nodes', []))}"
-                        else:
-                            # Fallback: use UUID short
+                        except Exception:
                             new_vid = f"v_{str(uuid.uuid4())[:8]}"
                         
                         # Extract operation description from query (first 50 chars)
