@@ -13,6 +13,7 @@ A powerful, multi-modal data analysis platform that lets you upload messy real-w
 - [Usage](#usage)
 - [API Documentation](#api-documentation)
 - [Project Structure](#project-structure)
+- [Data visualization (`data_visualization/`)](data_visualization/README.md)
 - [Components](#components)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
@@ -48,7 +49,7 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 | Service | URL | Platform | Status |
 |---------|-----|----------|--------|
 | **Streamlit UI** | https://data-assistant-mu6xtnwivdpi8umtp94wuh.streamlit.app/ | Streamlit Cloud | ✅ Live |
-| **FastAPI Backend** | https://data-assistant-m4kl.onrender.com | Render | ✅ Live |
+| **FastAPI Backend** | https://data-assistant-hj5f.onrender.com | Render | ✅ Live |
 | **MCP Server** | https://data-analyst-mcp-server.onrender.com | Render | ✅ Live |
 
 
@@ -244,13 +245,13 @@ flowchart TD
 - **Session Persistence**: Data persists across page reloads
 
 ### 3. Visualization Centre Tab
-- **Zero-Latency Charts**: Instant chart generation using Plotly
-- **8 Chart Types**: Bar, Line, Scatter, Area, Box, Histogram, Pie, Heatmap
-- **Interactive Visualizations**: Zoom, pan, hover tooltips
-- **Column Mapping**: Easy X/Y axis and color grouping selection
-- **Aggregations**: Sum, mean, count, min, max for grouped data
-- **One-Click Exports**: PNG, SVG, and interactive HTML formats
-- **Theme-Aware**: Automatically adapts to light/dark mode
+- **Modular package** (`data_visualization/`): orchestration in `visualization.py`; chart logic in `core/` and `charts/`; UI in `ui/`; themes in `theme/`; dashboard grid in `dashboard/`. See **[data_visualization/README.md](data_visualization/README.md)** for the full layout.
+- **Chart registry**: `CHART_REGISTRY` maps types (bar, line, scatter, area, box, histogram, pie, heatmap, violin, sunburst, treemap, funnel, sankey, choropleth, scatter geo, animated, plus combo mode) to Plotly builders.
+- **`ChartConfig`**: Serializable dataclass (`core/chart_config.py`) drives cache keys, controls, and `generate_from_config()` (cross-filter → aggregate → sample → chart → theme).
+- **Interactive visuals**: Zoom, pan, hover; optional **cross-filtering** when you select points on the main chart.
+- **Aggregations**: Sum, mean, count, min, max via `core/aggregator.py`.
+- **Exports**: PNG, SVG, HTML (single charts and dashboard HTML bundle) via `ui/export_panel.py` and `dashboard_builder.py`.
+- **Theme-aware Plotly templates** (`theme/plotly_templates.py`) aligned with Streamlit light/dark mode.
 
 #### Visualization Generation Pipeline
 
@@ -490,7 +491,7 @@ flowchart LR
     
     subgraph "Render Cloud Platform"
         MCP_PROD[MCP Server<br/>data-analyst-mcp-server.onrender.com<br/>✅ Python Environment]
-        API_PROD[FastAPI Backend<br/>data-assistant-m4kl.onrender.com<br/>✅ Python Environment]
+        API_PROD[FastAPI Backend<br/>data-assistant-hj5f.onrender.com<br/>✅ Python Environment]
     end
     
     subgraph "Cloud Services"
@@ -585,7 +586,7 @@ model = "gpt-4o"
 
 # Production Deployment URLs (Render)
 [api]
-fastapi_url = "https://data-assistant-m4kl.onrender.com"
+fastapi_url = "https://data-assistant-hj5f.onrender.com"
 mcp_server_url = "https://data-analyst-mcp-server.onrender.com/data/mcp"
 
 # For Local Development: Uncomment and use these
@@ -621,7 +622,7 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 # Production Deployment URLs
 MCP_SERVER_URL=https://data-analyst-mcp-server.onrender.com/data/mcp
-FASTAPI_URL=https://data-assistant-m4kl.onrender.com
+FASTAPI_URL=https://data-assistant-hj5f.onrender.com
 ```
 
 **Note**: The app will try `secrets.toml` first, then fall back to environment variables.
@@ -632,7 +633,7 @@ FASTAPI_URL=https://data-assistant-m4kl.onrender.com
 
 **🌐 Production Services (Already Deployed)**:
 - **MCP Server**: https://data-analyst-mcp-server.onrender.com
-- **FastAPI Backend**: https://data-assistant-m4kl.onrender.com
+- **FastAPI Backend**: https://data-assistant-hj5f.onrender.com
 - **Status**: Both services are live on Render!
 
 **Only Start Streamlit Locally:**
@@ -689,7 +690,7 @@ Based on [Streamlit's official secrets management](https://docs.streamlit.io/dev
 |---------|-----|-------------|---------|----------|
 | `[openai]` | `api_key` | OpenAI API key for LLM | - | Yes |
 | `[openai]` | `model` | OpenAI model to use | gpt-4o | No |
-| `[api]` | `fastapi_url` | FastAPI backend URL | https://data-assistant-m4kl.onrender.com | No |
+| `[api]` | `fastapi_url` | FastAPI backend URL | https://data-assistant-hj5f.onrender.com | No |
 | `[api]` | `mcp_server_url` | MCP server endpoint | https://data-analyst-mcp-server.onrender.com/data/mcp | No |
 | `[redis]` | `rest_url` | Upstash Redis REST API URL | - | Yes* |
 | `[redis]` | `rest_token` | Upstash Redis REST API Token | - | Yes* |
@@ -710,7 +711,7 @@ Based on [Streamlit's official secrets management](https://docs.streamlit.io/dev
 | `LANGFUSE_SECRET_KEY` | Langfuse secret key | - | None | No |
 | `LANGFUSE_BASE_URL` | Langfuse base URL | https://cloud.langfuse.com | https://cloud.langfuse.com | No |
 | `MCP_SERVER_URL` | MCP server endpoint | https://data-analyst-mcp-server.onrender.com/data/mcp | http://127.0.0.1:8000/data/mcp | No |
-| `FASTAPI_URL` | FastAPI backend URL | https://data-assistant-m4kl.onrender.com | http://127.0.0.1:8001 | No |
+| `FASTAPI_URL` | FastAPI backend URL | https://data-assistant-hj5f.onrender.com | http://127.0.0.1:8001 | No |
 | `PORT` | FastAPI server port | 8001 | 8001 | No |
 
 *Required only if running backend services locally
@@ -823,13 +824,20 @@ Data-Assistant/
 │   ├── excel_handler.py      # Excel file processor
 │   └── image_handler.py      # Image file processor (OCR)
 │
-├── data_visualization/        # Visualization module
-│   ├── __init__.py
-│   ├── visualization.py      # Main visualization tab
-│   ├── chart_compositions.py  # Advanced chart types
-│   ├── dashboard_builder.py   # Multi-chart layouts
-│   ├── smart_recommendations.py  # LLM-based chart recommendations
-│   └── utils.py              # Utility functions
+├── data_visualization/        # Visualization Centre (see data_visualization/README.md)
+│   ├── __init__.py            # Public exports (render_visualization_tab, generate_chart, …)
+│   ├── config.py              # Session keys, sampling limits, dashboard layout presets
+│   ├── visualization.py       # Tab orchestrator: CSS, session fetch, controls, chart, export, dashboard
+│   ├── utils.py               # Shared helpers (e.g. error figures)
+│   ├── chart_compositions.py  # Extra composition helpers; public `generate_combo_chart`; combo mode also in charts/combo.py
+│   ├── dashboard_builder.py   # DashboardBuilder: pin charts, layouts, render_tab, export
+│   ├── smart_recommendations.py
+│   ├── core/                  # ChartConfig, generator, data fetch, aggregate, validate, sample
+│   ├── charts/                # CHART_REGISTRY + per-type Plotly builders (basic, geo, flow, …)
+│   ├── theme/                 # Plotly templates, palettes, layout, optional CSS inject
+│   ├── ui/                    # Controls, chart display, filter bar, export, metrics, toolbar
+│   ├── dashboard/             # Grid renderer, chart cards, state helpers
+│   └── interactivity/         # Cross-filter and selection handling
 │
 ├── data-mcp/                  # MCP server for data operations
 │   ├── server.py             # FastMCP server
@@ -918,28 +926,21 @@ Data-Assistant/
 
 ### 5. Visualization Module (`data_visualization/`)
 
-**Purpose**: Provides zero-latency chart generation using Plotly with session data integration.
+**Purpose**: Plotly-based **Visualization Centre** for session data: typed chart registry, configurable pipeline, Streamlit UI, and optional LLM chart suggestions.
 
-**Key Components**:
-- `visualization.py`: Main visualization tab rendering
-- `dashboard_builder.py`: Multi-chart layouts and dashboard creation
-- `chart_compositions.py`: Advanced chart types (combo charts)
-- `smart_recommendations.py`: LLM-based chart type recommendations
+**Documentation**: **[data_visualization/README.md](data_visualization/README.md)** (architecture, folder map, public API).
 
-**Key Functions**:
-- `render_visualization_tab()`: Main function to render the visualization tab
-- `get_dataframe_from_session()`: Fetches session data and converts to DataFrame
-- `generate_chart()`: Generate Plotly figure based on user selections
+**Entry point**: `render_visualization_tab()` in `visualization.py` loads tables via `FASTAPI_URL` (default `https://data-assistant-hj5f.onrender.com`), then composes `theme`, `ui`, `core`, and `dashboard_builder`.
 
-**Features**:
-- 8 chart types: Bar, Line, Scatter, Area, Box, Histogram, Pie, Heatmap
-- Smart column selection with automatic defaults
-- Aggregation support (sum, mean, count, min, max)
-- Interactive Plotly charts with zoom/pan/hover
-- Export to PNG, SVG, and HTML formats
-- Theme-aware (light/dark mode support)
-- Multi-table support with table selection
-- Dashboard builder with grid layouts and chart pinning
+**Core concepts**:
+- **`ChartConfig`** (`core/chart_config.py`): Serializable config (axes, aggregation, combo axes, sankey/geo/animation fields, cross-filter state) and stable cache keys.
+- **`generate_from_config(df, config)`** (`core/chart_generator.py`): Applies cross-filter → aggregation → sampling → `CHART_REGISTRY` or combo chart → `apply_theme`.
+- **`get_dataframe_from_session()`** (`core/data_fetcher.py`): HTTP fetch from `/api/session/{id}/tables?format=summary`, cached with `@st.cache_data`.
+- **`CHART_REGISTRY`** (`charts/__init__.py`): Registers builders for bar, line, scatter, area, box, histogram, pie, heatmap, violin, sunburst, treemap, funnel, sankey, choropleth, scatter geo, animated; combo uses `charts/combo.py`.
+
+**Also exported** (`__init__.py`): `get_chart_recommendations`, `ChartRecommendation`, `DashboardBuilder`, `generate_combo_chart` (backward compatibility).
+
+**Features**: Multi-table selection, cross-filtering, smart recommendations, dashboard pinning and HTML export, PNG/SVG/HTML single-chart export.
 
 ### 6. InsightBot Module (`chatbot/`)
 

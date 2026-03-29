@@ -1,9 +1,4 @@
-"""
-Redis database module for session management with automatic TTL-based cleanup.
-
-All session data (tables, metadata, versions, graphs) automatically expires
-after the configured TTL period (default: 30 minutes).
-"""
+"""Redis session store: tables, metadata, versions, and TTL."""
 
 from .redis_store import RedisStore
 from .constants import (

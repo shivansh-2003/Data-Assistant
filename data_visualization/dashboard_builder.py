@@ -91,54 +91,14 @@ class DashboardBuilder:
     def generate_chart_from_config(self, df: pd.DataFrame, config: Dict[str, Any]) -> go.Figure:
         """
         Generate a chart figure from saved configuration.
-        
-        Args:
-            df: DataFrame
-            config: Chart configuration dictionary
-            
-        Returns:
-            Plotly figure
         """
-        # Import here to avoid circular imports
-        from .visualization import generate_chart
-        from .chart_compositions import generate_combo_chart
-        
-        chart_mode = config.get('mode', 'basic')
-        
-        if chart_mode == 'basic':
-            return generate_chart(
-                df,
-                config.get('chart_type', 'bar'),
-                config.get('x_col'),
-                config.get('y_col'),
-                config.get('agg_func', 'none'),
-                config.get('color_col'),
-                config.get('heatmap_columns')  # Support multi-column heatmaps
-            )
-        elif chart_mode == 'combo':
-            return generate_combo_chart(
-                df,
-                config.get('x_col'),
-                config.get('y_col'),
-                config.get('y2_col'),
-                config.get('chart1_type', 'bar'),
-                config.get('chart2_type', 'line'),
-                config.get('color_col')
-            )
-        elif chart_mode in ['small_multiples', 'faceted', 'layered']:
-            # These chart types are no longer supported
-            # Fallback to basic chart
-            return generate_chart(
-                df,
-                config.get('chart_type', 'bar'),
-                config.get('x_col'),
-                config.get('y_col'),
-                config.get('agg_func', 'none'),
-                config.get('color_col')
-            )
-        else:
-            # Fallback
-            return generate_chart(df, 'bar', config.get('x_col'), config.get('y_col'))
+        from .core.chart_config import ChartConfig
+        from .core.chart_generator import generate_from_config
+
+        cfg = ChartConfig.from_dashboard_config(config)
+        if config.get("heatmap_columns"):
+            cfg.heatmap_columns = config["heatmap_columns"]
+        return generate_from_config(df, cfg)
     
     def render_tab(self, df: pd.DataFrame, selected_table: str) -> bool:
         """

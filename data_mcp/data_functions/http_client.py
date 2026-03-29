@@ -14,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Configuration
-INGESTION_API_URL = "https://data-assistant-84sf.onrender.com"
+INGESTION_API_URL = "https://data-assistant-hj5f.onrender.com"
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
 
 

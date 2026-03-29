@@ -1,5 +1,6 @@
 """Session data loader adapted for InsightBot."""
 
+import os
 import logging
 from typing import Dict, List, Optional, Any
 import pandas as pd
@@ -10,7 +11,7 @@ from redis_db import RedisStore
 logger = logging.getLogger(__name__)
 
 # Session endpoint configuration
-FASTAPI_URL = "https://data-assistant-m4kl.onrender.com"
+FASTAPI_URL = os.getenv("FASTAPI_URL", "https://data-assistant-hj5f.onrender.com")
 SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 

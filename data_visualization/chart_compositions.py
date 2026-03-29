@@ -202,58 +202,58 @@ def generate_combo_chart(
     else:
         # Single trace without grouping
         color1 = colors[0] if len(colors) > 0 else '#1f77b4'
-        
-    if chart1_type == 'bar':
-        trace1 = go.Bar(
-            x=df[x_col],
-            y=df[y1_col],
-            name=y1_col,
+
+        if chart1_type == 'bar':
+            trace1 = go.Bar(
+                x=df[x_col],
+                y=df[y1_col],
+                name=y1_col,
                 marker_color=color1,
                 opacity=opacity1,
                 hovertemplate=f"<b>{x_col}</b>: %{{x}}<br>" +
                              f"<b>{y1_col}</b>: %{{y:,.2f}}<br>" +
                              "<extra></extra>"
-        )
-    elif chart1_type == 'line':
-        trace1 = go.Scatter(
-            x=df[x_col],
-            y=df[y1_col],
-            name=y1_col,
-            mode='lines+markers',
+            )
+        elif chart1_type == 'line':
+            trace1 = go.Scatter(
+                x=df[x_col],
+                y=df[y1_col],
+                name=y1_col,
+                mode='lines+markers',
                 line=dict(color=color1, width=3),
                 marker=dict(size=8, color=color1, opacity=opacity1),
                 hovertemplate=f"<b>{x_col}</b>: %{{x}}<br>" +
                              f"<b>{y1_col}</b>: %{{y:,.2f}}<br>" +
                              "<extra></extra>"
-        )
-    elif chart1_type == 'scatter':
-        trace1 = go.Scatter(
-            x=df[x_col],
-            y=df[y1_col],
-            name=y1_col,
-            mode='markers',
+            )
+        elif chart1_type == 'scatter':
+            trace1 = go.Scatter(
+                x=df[x_col],
+                y=df[y1_col],
+                name=y1_col,
+                mode='markers',
                 marker=dict(color=color1, size=10, opacity=opacity1, line=dict(width=1.5, color='white')),
                 hovertemplate=f"<b>{x_col}</b>: %{{x}}<br>" +
                              f"<b>{y1_col}</b>: %{{y:,.2f}}<br>" +
                              "<extra></extra>"
-        )
-    elif chart1_type == 'area':
-        trace1 = go.Scatter(
-            x=df[x_col],
-            y=df[y1_col],
-            name=y1_col,
-            mode='lines',
-            fill='tozeroy',
+            )
+        elif chart1_type == 'area':
+            trace1 = go.Scatter(
+                x=df[x_col],
+                y=df[y1_col],
+                name=y1_col,
+                mode='lines',
+                fill='tozeroy',
                 line=dict(color=color1, width=2.5),
                 opacity=opacity1 * 0.7,
                 hovertemplate=f"<b>{x_col}</b>: %{{x}}<br>" +
                              f"<b>{y1_col}</b>: %{{y:,.2f}}<br>" +
                              "<extra></extra>"
-        )
-    else:
+            )
+        else:
             trace1 = go.Bar(x=df[x_col], y=df[y1_col], name=y1_col, marker_color=color1, opacity=opacity1)
-    
-    fig.add_trace(trace1, secondary_y=False)
+
+        fig.add_trace(trace1, secondary_y=False)
     
     # Second trace (right y-axis) - with or without grouping
     if color_col and grouped_data is not None:
@@ -331,65 +331,65 @@ def generate_combo_chart(
     else:
         # Single trace without grouping
         color2 = colors[1] if len(colors) > 1 else '#ff7f0e'
-        
-    if chart2_type == 'bar':
-        trace2 = go.Bar(
-            x=df[x_col],
-            y=df[y2_col],
-            name=y2_col,
+
+        if chart2_type == 'bar':
+            trace2 = go.Bar(
+                x=df[x_col],
+                y=df[y2_col],
+                name=y2_col,
                 marker_color=color2,
                 opacity=opacity2,
                 hovertemplate=f"<b>{x_col}</b>: %{{x}}<br>" +
                              f"<b>{y2_col}</b>: %{{y:,.2f}}<br>" +
                              "<extra></extra>"
-        )
-    elif chart2_type == 'line':
-        trace2 = go.Scatter(
-            x=df[x_col],
-            y=df[y2_col],
-            name=y2_col,
-            mode='lines+markers',
-            line=dict(color=color2, width=3, dash='dash'),
-            marker=dict(size=8, color=color2, opacity=opacity2, symbol='diamond'),
-            hovertemplate=f"<b>{x_col}</b>: %{{x}}<br>" +
-                         f"<b>{y2_col}</b>: %{{y:,.2f}}<br>" +
-                         "<extra></extra>"
-        )
-    elif chart2_type == 'scatter':
-        trace2 = go.Scatter(
-            x=df[x_col],
-            y=df[y2_col],
-            name=y2_col,
-            mode='markers',
-            marker=dict(color=color2, size=10, opacity=opacity2, symbol='diamond',
-                      line=dict(width=1.5, color='white')),
-            hovertemplate=f"<b>{x_col}</b>: %{{x}}<br>" +
-                         f"<b>{y2_col}</b>: %{{y:,.2f}}<br>" +
-                         "<extra></extra>"
-        )
-    elif chart2_type == 'area':
-        trace2 = go.Scatter(
-            x=df[x_col],
-            y=df[y2_col],
-            name=y2_col,
-            mode='lines',
-            fill='tozeroy',
-            line=dict(color=color2, width=2.5, dash='dot'),
-            opacity=opacity2 * 0.7,
-            hovertemplate=f"<b>{x_col}</b>: %{{x}}<br>" +
-                         f"<b>{y2_col}</b>: %{{y:,.2f}}<br>" +
-                         "<extra></extra>"
-        )
-    else:
-        trace2 = go.Scatter(
-            x=df[x_col],
-            y=df[y2_col],
-            name=y2_col,
-            mode='lines',
-            line=dict(color=color2, dash='dash')
-        )
-    
-    fig.add_trace(trace2, secondary_y=True)
+            )
+        elif chart2_type == 'line':
+            trace2 = go.Scatter(
+                x=df[x_col],
+                y=df[y2_col],
+                name=y2_col,
+                mode='lines+markers',
+                line=dict(color=color2, width=3, dash='dash'),
+                marker=dict(size=8, color=color2, opacity=opacity2, symbol='diamond'),
+                hovertemplate=f"<b>{x_col}</b>: %{{x}}<br>" +
+                             f"<b>{y2_col}</b>: %{{y:,.2f}}<br>" +
+                             "<extra></extra>"
+            )
+        elif chart2_type == 'scatter':
+            trace2 = go.Scatter(
+                x=df[x_col],
+                y=df[y2_col],
+                name=y2_col,
+                mode='markers',
+                marker=dict(color=color2, size=10, opacity=opacity2, symbol='diamond',
+                          line=dict(width=1.5, color='white')),
+                hovertemplate=f"<b>{x_col}</b>: %{{x}}<br>" +
+                             f"<b>{y2_col}</b>: %{{y:,.2f}}<br>" +
+                             "<extra></extra>"
+            )
+        elif chart2_type == 'area':
+            trace2 = go.Scatter(
+                x=df[x_col],
+                y=df[y2_col],
+                name=y2_col,
+                mode='lines',
+                fill='tozeroy',
+                line=dict(color=color2, width=2.5, dash='dot'),
+                opacity=opacity2 * 0.7,
+                hovertemplate=f"<b>{x_col}</b>: %{{x}}<br>" +
+                             f"<b>{y2_col}</b>: %{{y:,.2f}}<br>" +
+                             "<extra></extra>"
+            )
+        else:
+            trace2 = go.Scatter(
+                x=df[x_col],
+                y=df[y2_col],
+                name=y2_col,
+                mode='lines',
+                line=dict(color=color2, dash='dash')
+            )
+
+        fig.add_trace(trace2, secondary_y=True)
     
     # Update axes with better formatting
     fig.update_xaxes(

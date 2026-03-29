@@ -9,6 +9,12 @@ import requests
 import pandas as pd
 from typing import Dict, List, Optional, Any
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+
 import asyncio
 import time
 import uuid
@@ -43,15 +49,16 @@ def get_secret(key_path, fallback_env=None, default=None):
             return os.getenv(fallback_env, default)
         return default
 
-# FastAPI endpoint configuration
-FASTAPI_URL = "https://data-assistant-84sf.onrender.com"
+# FastAPI endpoint configuration (use 127.0.0.1 for client requests — 0.0.0.0 is invalid as a destination)
+# Must match the port where uvicorn runs (see main.py PORT, default 8000).
+FASTAPI_URL = os.getenv("FASTAPI_URL", "https://data-assistant-hj5f.onrender.com")
 UPLOAD_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/file-upload"
 HEALTH_ENDPOINT = f"{FASTAPI_URL}/health"
 CONFIG_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/config"
 SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 # MCP Configuration
-MCP_SERVER_URL = "https://data-assistant-84sf.onrender.com/data/mcp"
+MCP_SERVER_URL = "https://data-assistant-hj5f.onrender.com/data/mcp"
 OPENAI_API_KEY = get_secret("openai.api_key", "OPENAI_API_KEY")
 OPENAI_MODEL = "gpt-5.1"  # Fallback to gpt-4o if not specified
 

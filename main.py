@@ -3,12 +3,19 @@ FastAPI application for file ingestion and session management.
 Stores DataFrames in Redis with automatic TTL expiration.
 """
 
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Ensure .env is applied before any module reads UPSTASH_* (see also redis_db/constants.py)
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import logging
-import os
 import uuid
 import time
 import base64
@@ -26,8 +33,6 @@ from langfuse import observe
 from ingestion.config import IngestionConfig
 from ingestion.supabase_handler import load_supabase_tables
 from redis_db.constants import KEY_SESSION_GRAPH
-
-KEY_SESSION_GRAPH = None
 
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -77,6 +82,20 @@ class SupabaseIngestionRequest(BaseModel):
 # CRITICAL: Create app FIRST to ensure it always exists (for Render deployment)
 app = FastAPI(title="Data Analyst Platform", version="1.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+
+@app.on_event("startup")
+async def _log_redis_on_startup() -> None:
+    store = get_default_store()
+    if store.is_connected():
+        logger.info("Upstash Redis: connected — session tables will persist.")
+    else:
+        logger.error(
+            "Upstash Redis: NOT connected. Set UPSTASH_REDIS_REST_URL and "
+            "UPSTASH_REDIS_REST_TOKEN in your project .env. "
+            "Uploads may return 200 with redis_stored=false; GET /api/session/.../tables will 404."
+        )
+
 
 # Add minimal health check IMMEDIATELY (before MCP loading)
 @app.get("/ping")
@@ -157,7 +176,17 @@ def _build_response_and_store(session_id: str, result: Dict[str, Any], file_name
                 store.update_graph(session_id, parent_vid=None, new_vid="v0", operation="Initial Upload", query=None)
         else:
             response_data["redis_stored"] = False
-    
+            if not store.is_connected():
+                response_data["redis_error"] = (
+                    "Redis not connected. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in .env "
+                    "and restart the API."
+                )
+            else:
+                response_data["redis_error"] = (
+                    "Redis save failed (see API logs). Common causes: payload too large for Upstash, "
+                    "or transient REST error."
+                )
+
     return response_data
 
 # Endpoints
@@ -172,6 +201,7 @@ async def root():
             "url_upload": "/api/ingestion/url-upload",
             "supabase_import": "/api/ingestion/supabase-import",
             "health": "/health",
+            "debug_redis": "/api/debug/redis",
             "session_tables": "GET /api/session/{session_id}/tables",
             "session_delete": "DELETE /api/session/{session_id}"
         }
@@ -180,7 +210,7 @@ async def root():
 @app.get("/test-mcp")
 async def test_mcp():
     is_production = os.getenv("RENDER") or os.getenv("ENVIRONMENT") == "production"
-    base_url = os.getenv("RENDER_EXTERNAL_URL", "https://data-assistant-m4kl.onrender.com") if is_production else f"http://localhost:{int(os.getenv('PORT', 10000))}"
+    base_url = os.getenv("RENDER_EXTERNAL_URL", "https://data-assistant-hj5f.onrender.com") if is_production else f"http://localhost:{int(os.getenv('PORT', 8000))}"
     return {"mcp_mounted": mcp_available, "endpoint": "/data/mcp", "url": f"{base_url}/data/mcp"}
 
 # File Upload Endpoints
@@ -479,10 +509,10 @@ async def delete_version_endpoint(session_id: str, version_id: str):
         graph["nodes"] = [n for n in graph["nodes"] if n["id"] != version_id]
         graph["edges"] = [e for e in graph["edges"] if e["from"] != version_id and e["to"] != version_id]
         
-        if KEY_SESSION_GRAPH:
-            key = KEY_SESSION_GRAPH.format(sid=session_id)
+        key = KEY_SESSION_GRAPH.format(sid=session_id)
+        if store.redis:
             store.redis.setex(key, store.session_ttl, json.dumps(graph))
-        
+
         return JSONResponse(content={"success": True, "message": f"Version {version_id} deleted"})
     else:
         raise HTTPException(status_code=404, detail=f"Version '{version_id}' not found")
@@ -515,10 +545,10 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
     graph["nodes"] = [n for n in nodes if n["id"] in to_keep]
     graph["edges"] = [e for e in graph["edges"] if e["from"] in to_keep and e["to"] in to_keep]
     
-    if KEY_SESSION_GRAPH:
-        key = KEY_SESSION_GRAPH.format(sid=session_id)
+    key = KEY_SESSION_GRAPH.format(sid=session_id)
+    if store.redis:
         store.redis.setex(key, store.session_ttl, json.dumps(graph))
-    
+
     return JSONResponse(content={
         "success": True,
         "message": f"Pruned {deleted_count} versions, kept {len(to_keep)}",
@@ -528,6 +558,6 @@ async def prune_versions_endpoint(session_id: str, request_data: Optional[Dict[s
 
 if __name__ == "__main__":
 
-    port = int(os.getenv("PORT", 10000))
+    port = int(os.getenv("PORT", 8000))
     print(f"Starting server on 0.0.0.0:{port}")
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False, log_level="info")
