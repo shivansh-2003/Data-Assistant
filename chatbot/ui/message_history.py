@@ -111,6 +111,7 @@ def display_message_history(
                                 fig = generate_chart_from_config_ui(snap_viz_config, session_id)
                                 if fig is not None:
                                     st.plotly_chart(fig, width="stretch", key=f"viz_{idx}")
+                        st.markdown('<div class="action-bar" role="group" aria-label="Message actions">', unsafe_allow_html=True)
                         act1, act2, act3 = st.columns(3)
                         with act1:
                             if st.button("Refine", key=f"refine_{idx}", help="Ask a follow-up"):
@@ -121,6 +122,7 @@ def display_message_history(
                             st.button("Save insight", key=f"save_insight_{idx}", help="Save to session (placeholder)")
                         with act3:
                             st.button("Share", key=f"share_{idx}", help="Copy or share (placeholder)")
+                        st.markdown("</div>", unsafe_allow_html=True)
                 if snapshot.get("generated_code"):
                     with st.chat_message("assistant"):
                         with st.expander("🔍 See how this was computed", expanded=False):

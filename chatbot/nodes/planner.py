@@ -3,14 +3,13 @@
 import logging
 import json
 from typing import Dict, List, Any, Optional
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
-import os
 from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
 
 from ..constants import INTENT_SMALL_TALK, INTENT_DATA_QUERY, TOOL_INSIGHT
+from ..llm_registry import get_planner_llm
 from ..prompts import get_planner_prompt
 from ..utils.state_helpers import get_current_query
 
@@ -159,12 +158,8 @@ def planner_node(state: Dict) -> Dict:
         )
         
         # Initialize LLM
-        llm = ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-            temperature=0.1,
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
-        
+        llm = get_planner_llm()
+
         # Get plan
         response = llm.invoke([
             SystemMessage(content=system_prompt),

@@ -36,8 +36,8 @@ The Data Assistant Platform is a comprehensive data analysis solution that combi
 - **AI/ML**: 
   - LangChain (Agent framework, tool integration)
   - LangGraph (Stateful conversation flow, MemorySaver checkpointing)
-  - OpenAI GPT-4o/GPT-5 (Intent classification, code generation, summarization)
-  - LangChain Experimental (pandas dataframe agent)
+  - OpenAI GPT-4o (schema reasoning, code generation) + GPT-4o-mini (intent classification, summarization, suggestions)
+  - LLM singleton registry (`chatbot/llm_registry.py`) — eliminates ~1.4s per-query init overhead
 - **Data Processing**: Pandas, NumPy
 - **Visualization**: Plotly (interactive charts), Kaleido (PNG/SVG export)
 - **MCP Server**: FastMCP for tool-based data operations
@@ -124,7 +124,7 @@ graph TB
     end
     
     subgraph "AI Layer"
-        LLM[OpenAI GPT-4/5<br/>LangChain]
+        LLM[OpenAI GPT-4o / GPT-4o-mini<br/>LangChain]
         TOOLS[18+ Data Tools]
         
         LLM --> TOOLS
@@ -247,7 +247,8 @@ flowchart TD
 ### 3. Visualization Centre Tab
 - **Modular package** (`data_visualization/`): orchestration in `visualization.py`; chart logic in `core/` and `charts/`; UI in `ui/`; themes in `theme/`; dashboard grid in `dashboard/`. See **[data_visualization/README.md](data_visualization/README.md)** for the full layout.
 - **Chart registry**: `CHART_REGISTRY` maps types (bar, line, scatter, area, box, histogram, pie, heatmap, violin, sunburst, treemap, funnel, sankey, choropleth, scatter geo, animated, plus combo mode) to Plotly builders.
-- **`ChartConfig`**: Serializable dataclass (`core/chart_config.py`) drives cache keys, controls, and `generate_from_config()` (cross-filter → aggregate → sample → chart → theme).
+- **`ChartConfig`**: Serializable dataclass (`core/chart_config.py`) drives controls and `generate_from_config()` (cross-filter → aggregate → sample → chart → theme).
+- **Cached session data**: Three-layer fetch (`core/data_fetcher.py`: session_state → `@st.cache_data` TTL → FastAPI); **`on_data_changed()`** invalidates caches after data manipulation.
 - **Interactive visuals**: Zoom, pan, hover; optional **cross-filtering** when you select points on the main chart.
 - **Aggregations**: Sum, mean, count, min, max via `core/aggregator.py`.
 - **Exports**: PNG, SVG, HTML (single charts and dashboard HTML bundle) via `ui/export_panel.py` and `dashboard_builder.py`.
@@ -314,16 +315,31 @@ flowchart TD
 
 ### 4. InsightBot — Intelligent Chatbot Tab
 - **🤖 LangGraph architecture**: State graph with router, analyzer, planner, insight, viz, responder, clarification, and suggestion nodes; persistent memory via MemorySaver.
-- **💬 Multi-turn conversations**: Context-aware follow-ups (e.g. “What about the maximum?” resolved into full questions); conversation context tracks last columns, aggregation, and filters.
-- **🔍 Column clarification**: When multiple columns match a term (e.g. “sales”), asks “Did you mean X or Y?” and resolves on the next turn.
-- **💡 Suggestion engine**: After each response, three contextual follow-up questions as clickable chips.
+- **⚡ Streaming UI**: `graph.stream(stream_mode='values')` renders the response as soon as the responder node completes — ~1–2s perceived vs 15s all-or-nothing. Progressive status captions shown while nodes run.
+- **🔋 LLM singleton registry** (`chatbot/llm_registry.py`): One `ChatOpenAI` instance per `(model, temperature, max_tokens)` config, reused process-wide. Eliminates ~1.4s of repeated init overhead per query.
+- **🎯 Smart model assignment**: gpt-4o-mini for routing, context resolution, summarization, and suggestions (~5.5s saved); gpt-4o kept only for analyzer, planner, and code generator where schema reasoning is required.
+- **⏭️ Planner skip**: ~80% of queries bypass the planner node entirely (saving ~2s) via a keyword + sub-intent complexity gate. Complex queries (YoY, cohort, rolling average, trend) still use the full planner path.
+- **💬 Multi-turn conversations**: Context-aware follow-ups (e.g. "What about the maximum?" resolved into full questions); conversation context tracks last columns, aggregation, and filters.
+- **🔍 Column clarification**: When multiple columns match a term (e.g. "sales"), asks "Did you mean X or Y?" and resolves on the next turn.
+- **💡 Suggestion engine**: After each response, three contextual follow-up questions as clickable chips. Intent-aware pre-defined fallbacks ensure chips always appear even on LLM failure.
 - **📊 Per-turn visualizations**: Each AI message keeps its own chart/table/code; previous visualizations stay visible (response_snapshots).
-- **📋 Report & summarize**: “Give me a report on X” and “summarize that” / “what does that show?” using the last result.
+- **📋 Report & summarize**: "Give me a report on X" and "summarize that" / "what does that show?" using the last result.
 - **🔧 Function calling**: Analyzer selects tools (insight_tool, bar_chart, line_chart, scatter_chart, histogram, heatmap_chart, correlation_matrix, etc.) via LLM.
 - **🎯 Intent classification**: Routes to data_query, visualization_request, small_talk, report, summarize_last; triggers clarification when needed.
-- **⚡ Safe code execution**: LLM-generated pandas code runs in a sandbox with timeout and guardrails; correlation uses numeric columns only; rule-based fallback for simple queries.
+- **⚡ Safe code execution**: LLM-generated pandas code runs in a sandbox with timeout and guardrails; rule-based executor handles simple queries (mean, sum, count, min, max) with zero LLM calls.
 - **📈 Charts in chat**: Plotly charts and tables per response; heatmap for correlation queries; fallback to table when chart fails (e.g. too many categories).
-- **📝 Query types**: Statistical (mean, sum, count), comparative (compare X by Y), filtering & sorting, visualization (bar/line/scatter/histogram/heatmap), correlation (two-column or full matrix), report, summarize_last, and follow-ups.
+- **📝 Query types**: Statistical, comparative, filtering, visualization, correlation, report, summarize_last, and follow-ups.
+
+**InsightBot latency targets after optimizations:**
+
+| Query type | Wall clock | Perceived (streaming) |
+|---|---|---|
+| Simple stat (avg/sum/count) | ~4s | ~1s |
+| Comparison / groupby | ~6s | ~2s |
+| Visualization request | ~5s | ~1.5s |
+| Follow-up | ~7s | ~2s |
+| Complex (YoY, cohort) | ~10s | ~3s |
+| Small talk | ~1s | ~0.5s |
 
 
 
@@ -331,21 +347,24 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START([User Query]) --> ROUTER[Router Node<br/>Intent + Context + Clarification]
+    START([User Query]) --> ROUTER[Router Node<br/>gpt-4o-mini · Intent + Context]
     
     ROUTER --> ROUTE{Route}
     ROUTE -->|needs_clarification| CLARIFY[Clarification Node<br/>"Did you mean X or Y?"]
     ROUTE -->|small_talk| RESPONDER[Responder Node]
     ROUTE -->|summarize_last| INSIGHT[Insight Node]
-    ROUTE -->|data_query / viz / report| ANALYZER[Analyzer Node<br/>Tool Selection]
+    ROUTE -->|data_query / viz / report| ANALYZER[Analyzer Node<br/>gpt-4o · Tool Selection]
     
     CLARIFY --> END1([END])
     
-    ANALYZER --> INSIGHT
+    ANALYZER --> PLANNER_GATE{Complex query?}
+    PLANNER_GATE -->|~20% complex| PLANNER[Planner Node<br/>gpt-4o]
+    PLANNER_GATE -->|~80% simple| INSIGHT
+    PLANNER --> INSIGHT
     ANALYZER --> VIZ[Viz Node]
     ANALYZER --> RESPONDER
     
-    INSIGHT --> GEN[Code Gen + Safe Execute<br/>Summarize]
+    INSIGHT --> GEN[Rule-based OR Code Gen gpt-4o<br/>Summarize gpt-4o-mini]
     GEN --> VIZ_OR_RESP{Viz in tools?}
     VIZ_OR_RESP -->|Yes| VIZ
     VIZ_OR_RESP -->|No| RESPONDER
@@ -355,14 +374,15 @@ flowchart TD
     CHART --> RESPONDER
     
     RESPONDER --> FORMAT[Format Response<br/>Append Snapshot]
-    FORMAT --> SUGGEST[Suggestion Node<br/>3 Follow-up Chips]
+    FORMAT --> SUGGEST[Suggestion Node<br/>gpt-4o-mini · 3 Follow-up Chips]
     SUGGEST --> MEMORY[MemorySaver Checkpoint]
-    MEMORY --> END2([Display to User])
+    MEMORY --> END2([Stream to User ~1-2s perceived])
     
     style START fill:#4CAF50
     style ROUTER fill:#9C27B0
     style CLARIFY fill:#E91E63
     style ANALYZER fill:#FF9800
+    style PLANNER fill:#FF5722
     style INSIGHT fill:#2196F3
     style VIZ fill:#00BCD4
     style RESPONDER fill:#4CAF50
@@ -769,34 +789,35 @@ Data-Assistant/
 ├── chatbot/                   # InsightBot — LangGraph-powered chatbot
 │   ├── __init__.py
 │   ├── state.py              # LangGraph state schema (TypedDict), Node type
-│   ├── graph.py              # StateGraph definition and compilation
+│   ├── graph.py              # StateGraph, planner-skip complexity gate
+│   ├── llm_registry.py       # Singleton LLM cache — one ChatOpenAI per config tuple
 │   ├── streamlit_ui.py       # Streamlit UI entry (history, snapshots, chips)
-│   ├── README.md             # Chatbot architecture and flow (full detail)
+│   ├── README.md             # Chatbot architecture, model assignments, latency targets
 │   ├── DEVELOPER.md          # How to extend: add node, add chart, avoid redundancy
 │   ├── nodes/                # LangGraph nodes
-│   │   ├── router.py         # Intent, context resolution, clarification detection
+│   │   ├── router.py         # Intent (gpt-4o-mini), context resolution, clarification
 │   │   ├── clarification.py  # "Did you mean X or Y?" column disambiguation
-│   │   ├── analyzer.py       # Tool selection (function calling), correlation→heatmap
-│   │   ├── planner.py        # Multi-step query breakdown (complex queries)
-│   │   ├── insight.py        # Code generation, safe execution, summarization
+│   │   ├── analyzer.py       # Tool selection (gpt-4o), correlation→heatmap
+│   │   ├── planner.py        # Multi-step breakdown (gpt-4o, ~20% complex queries only)
+│   │   ├── insight.py        # Rule-based → code gen (gpt-4o) → summarize (gpt-4o-mini)
 │   │   ├── viz.py            # Chart config validation, state only (Plotly in UI)
 │   │   ├── responder.py      # Response formatting, response_snapshots
-│   │   └── suggestion_engine.py  # Follow-up question chips
+│   │   └── suggestion_engine.py  # gpt-4o-mini + intent-aware fallbacks
 │   ├── tools/                # LangChain @tool definitions (configs only)
 │   │   ├── data_tools.py     # insight_tool
 │   │   ├── simple_charts.py  # Bar, line, scatter, histogram, heatmap, correlation_matrix
 │   │   └── complex_charts.py # Combo and dashboard tools
 │   ├── execution/            # Code generation and safe execution
-│   │   ├── code_generator.py # LLM pandas code
+│   │   ├── code_generator.py # LLM pandas code (gpt-4o via registry)
 │   │   ├── code_validator.py # Forbidden ops, result variable
 │   │   ├── safe_executor.py  # Sandboxed execution, timeout, row limit
-│   │   └── rule_based_executor.py  # Simple queries (mean, sum, correlation) without LLM
+│   │   └── rule_based_executor.py  # Zero-LLM fast path (mean, sum, count, min, max)
 │   ├── utils/
 │   │   ├── session_loader.py # Load DataFrames and metadata from Redis
-│   │   ├── state_helpers.py # get_current_query(state) — shared query resolution
+│   │   ├── state_helpers.py  # get_current_query(state) — shared query resolution
 │   │   ├── profile_formatter.py  # Data profile for prompts and chart validation
-│   │   └── chart_selector.py # Optional: rule-based chart suggestion (not in main graph)
-│   ├── prompts/              # Modular, versioned prompts (one per file)
+│   │   └── chart_selector.py # Rule-based chart suggestion (not in main graph)
+│   ├── prompts/              # Modular prompts (one per file)
 │   │   ├── base.py           # PromptTemplate, truncate_schema
 │   │   ├── router_prompt.py
 │   │   ├── analyzer_prompt.py
@@ -807,7 +828,7 @@ Data-Assistant/
 │   │   └── ...               # suggestion, small_talk, context_resolver
 │   └── ui/                   # Streamlit UI components
 │       ├── message_history.py
-│       ├── chat_input.py
+│       ├── chat_input.py     # graph.stream() with progressive status labels
 │       └── chart_ui.py       # generate_chart_from_config_ui (Plotly from viz_config)
 │
 ├── redis_db/                  # Redis session management
@@ -826,18 +847,20 @@ Data-Assistant/
 │
 ├── data_visualization/        # Visualization Centre (see data_visualization/README.md)
 │   ├── __init__.py            # Public exports (render_visualization_tab, generate_chart, …)
+│   ├── cache_invalidation.py  # on_data_changed() — cross-tab cache coordination
 │   ├── config.py              # Session keys, sampling limits, dashboard layout presets
-│   ├── visualization.py       # Tab orchestrator: CSS, session fetch, controls, chart, export, dashboard
+│   ├── visualization.py       # Tab orchestrator: CSS, cached session fetch, controls, chart, export, dashboard
 │   ├── utils.py               # Shared helpers (e.g. error figures)
-│   ├── chart_compositions.py  # Extra composition helpers; public `generate_combo_chart`; combo mode also in charts/combo.py
+│   ├── chart_compositions.py  # Extra composition helpers; public `generate_combo_chart`
 │   ├── dashboard_builder.py   # DashboardBuilder: pin charts, layouts, render_tab, export
-│   ├── smart_recommendations.py
 │   ├── core/                  # ChartConfig, generator, data fetch, aggregate, validate, sample
 │   ├── charts/                # CHART_REGISTRY + per-type Plotly builders (basic, geo, flow, …)
 │   ├── theme/                 # Plotly templates, palettes, layout, optional CSS inject
-│   ├── ui/                    # Controls, chart display, filter bar, export, metrics, toolbar
+│   ├── ui/                    # Controls, chart display, filter bar, export panel, metrics, toolbar
 │   ├── dashboard/             # Grid renderer, chart cards, state helpers
-│   └── interactivity/         # Cross-filter and selection handling
+│   ├── interactivity/         # Cross-filter and selection handling
+│   └── intelligence/
+│       └── recommender.py     # LLM + rule-based chart recommendations
 │
 ├── data-mcp/                  # MCP server for data operations
 │   ├── server.py             # FastMCP server
@@ -926,65 +949,48 @@ Data-Assistant/
 
 ### 5. Visualization Module (`data_visualization/`)
 
-**Purpose**: Plotly-based **Visualization Centre** for session data: typed chart registry, configurable pipeline, Streamlit UI, and optional LLM chart suggestions.
+**Purpose**: Plotly-based **Visualization Centre** for session data: typed chart registry, `ChartConfig` pipeline, Streamlit UI, cached session fetches, and optional LLM chart suggestions.
 
 **Documentation**: **[data_visualization/README.md](data_visualization/README.md)** (architecture, folder map, public API).
 
-**Entry point**: `render_visualization_tab()` in `visualization.py` loads tables via `FASTAPI_URL` (default `https://data-assistant-hj5f.onrender.com`), then composes `theme`, `ui`, `core`, and `dashboard_builder`.
+**Entry point**: `render_visualization_tab()` in `visualization.py` loads tables via `get_tables_from_session()` / `get_dataframe_from_session()` (default API `https://data-assistant-hj5f.onrender.com`), then composes `theme`, `ui`, `core`, and `dashboard_builder`.
 
 **Core concepts**:
-- **`ChartConfig`** (`core/chart_config.py`): Serializable config (axes, aggregation, combo axes, sankey/geo/animation fields, cross-filter state) and stable cache keys.
+- **`ChartConfig`** (`core/chart_config.py`): Serializable config (axes, aggregation, combo axes, sankey/geo/animation fields, cross-filter state).
 - **`generate_from_config(df, config)`** (`core/chart_generator.py`): Applies cross-filter → aggregation → sampling → `CHART_REGISTRY` or combo chart → `apply_theme`.
-- **`get_dataframe_from_session()`** (`core/data_fetcher.py`): HTTP fetch from `/api/session/{id}/tables?format=summary`, cached with `@st.cache_data`.
+- **`get_dataframe_from_session()` / `get_tables_from_session()`** (`core/data_fetcher.py`): Three-layer cache (session_state → `@st.cache_data` → FastAPI).
+- **`on_data_changed()`** (`cache_invalidation.py`): Full invalidation after data manipulation (used from `app.py`).
 - **`CHART_REGISTRY`** (`charts/__init__.py`): Registers builders for bar, line, scatter, area, box, histogram, pie, heatmap, violin, sunburst, treemap, funnel, sankey, choropleth, scatter geo, animated; combo uses `charts/combo.py`.
 
-**Also exported** (`__init__.py`): `get_chart_recommendations`, `ChartRecommendation`, `DashboardBuilder`, `generate_combo_chart` (backward compatibility).
+**Also exported** (`__init__.py`): `get_chart_recommendations`, `ChartRecommendation`, `DashboardBuilder`, `generate_combo_chart`, `invalidate_viz_cache`.
 
-**Features**: Multi-table selection, cross-filtering, smart recommendations, dashboard pinning and HTML export, PNG/SVG/HTML single-chart export.
+**Features**: Multi-table selection, cross-filtering, smart recommendations (`intelligence/recommender.py`), dashboard pinning and HTML export, PNG/SVG/HTML single-chart export.
 
 ### 6. InsightBot Module (`chatbot/`)
 
-**Purpose**: LangGraph-powered conversational AI for data analysis with context resolution, clarification, tool selection, safe code execution, and per-turn visualizations.
+**Purpose**: LangGraph-powered conversational AI for data analysis with context resolution, clarification, tool selection, safe code execution, and per-turn visualizations. Optimized for low latency via LLM singleton registry, model downgrade on classification tasks, planner skip, and streaming UI.
 
-**Architecture**: State graph: router → (clarification | analyzer → planner → insight → viz | responder) → responder → suggestion → END. MemorySaver for persistence; response_snapshots so each AI message keeps its chart/table/code. DataFrames are not in state; loaded by `session_id` via `SessionLoader`.
+**Architecture**: `router → (clarification | analyzer → [planner?] → insight → viz | responder) → suggestion → END`. MemorySaver for persistence; response_snapshots so each AI message keeps its chart/table/code. Invoked via `graph.stream()` for progressive rendering.
 
-**Key Components**:
+**LLM Registry** (`llm_registry.py`): Singleton cache keyed by `(model_key, temperature, max_tokens)`. Getters: `get_router_llm()`, `get_analyzer_llm()`, `get_planner_llm()`, `get_code_gen_llm()`, `get_summarizer_llm()`, `get_suggestion_llm()`, `get_resolver_llm()`, `get_small_talk_llm()`. Saves ~1.4s/query.
 
 **Nodes**:
-- `nodes/router.py`: Intent classification, follow-up detection, context resolution (effective_query), clarification detection (needs_clarification, clarification_options)
-- `nodes/clarification.py`: Emits "Did you mean X or Y?" when multiple columns match; resolution on next turn
-- `nodes/analyzer.py`: Tool selection via function calling (insight_tool, bar_chart, line_chart, heatmap, etc.); correlation→heatmap
-- `nodes/planner.py`: Multi-step query breakdown for complex queries
-- `nodes/insight.py`: Code generation, safe execution, summarization; handles summarize_last; sets error_suggestion (e.g. did_you_mean)
-- `nodes/viz.py`: Chart config validation and state storage (Plotly built in UI from viz_config); sets viz_error on failure
-- `nodes/responder.py`: Formats response; appends AIMessage and current snapshot to response_snapshots
-- `nodes/suggestion_engine.py`: Generates three follow-up questions for UI chips
+- `nodes/router.py`: Intent (gpt-4o-mini, max_tokens=256), context resolution (gpt-4o-mini, max_tokens=128), clarification detection
+- `nodes/analyzer.py`: Tool selection (gpt-4o); correlation→heatmap coercion
+- `nodes/planner.py`: Multi-step breakdown (gpt-4o) — ~20% of complex queries only
+- `nodes/insight.py`: Rule-based fast path → code gen (gpt-4o) → summarize (gpt-4o-mini, max_tokens=256)
+- `nodes/suggestion_engine.py`: 3 follow-up questions (gpt-4o-mini, max_tokens=128) + intent-aware fallbacks
 
-**Tools**:
-- `tools/data_tools.py`: insight_tool for declarative analysis
-- `tools/simple_charts.py`: Bar, line, scatter, histogram, heatmap_chart, correlation_matrix
-- `tools/complex_charts.py`: Combo charts and dashboard tools
-
-**Execution**:
-- `execution/code_generator.py`: LLM pandas code (correlation numeric-only, filtering, groupby, etc.)
-- `execution/code_validator.py`: Forbidden ops, result variable enforcement
-- `execution/safe_executor.py`: Sandboxed execution with timeout and row limit
-- `execution/rule_based_executor.py`: Simple queries (mean, sum, correlation) without LLM
-
-**Utilities**: `utils/session_loader.py`, `utils/state_helpers.py` (get_current_query), `profile_formatter`; optional `chart_selector`. Prompts are modular in `prompts/` (get_*_prompt). See `chatbot/README.md` for full schema and flow; `chatbot/DEVELOPER.md` for how to extend.
+**Execution**: Rule-based executor called first (zero LLM, ~2.5s saved on ~30% of queries); gpt-4o code generator for remaining queries; sandboxed execution with timeout.
 
 **Key Features**:
-- ✅ **Context-Aware Memory**: conversation_context, effective_query, context_resolver for follow-ups
-- ✅ **Clarification**: Column disambiguation with "Did you mean?" and resolution next turn
-- ✅ **Suggestion Engine**: Three contextual follow-up chips after each response
-- ✅ **Per-Turn Snapshots**: response_snapshots keep each message’s chart/table/code; previous visualizations don’t disappear
-- ✅ **Report & Summarize**: report intent and summarize_last (re-summarize previous result)
-- ✅ **Safe Code Execution**: Sandboxed pandas with timeout; correlation on numeric columns only
-- ✅ **Error Recovery**: did_you_mean suggestions; partial success (table when chart fails)
+- Streaming UI: `graph.stream()` → ~1–2s perceived latency
+- Singleton registry + model downgrade: ~7s wall-clock saved per query
+- Planner skip (~80% of queries): ~2s saved
+- Rule-based fast path (~30% of queries): ~2.5s saved
+- Context-aware memory, column clarification, per-turn snapshots, reliable suggestion chips
 
-**Supported Query Patterns**:
-- 📊 Statistical, comparative, filtering, distribution, visualization, correlation, report, summarize_last, follow-ups
-
+See `chatbot/README.md` for full schema, flow, model assignment table, and latency breakdown.
 ### 7. Streamlit Frontend (`app.py`)
 
 **Purpose**: Web-based user interface for file upload, data manipulation, visualization, and chatbot.

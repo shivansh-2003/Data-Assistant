@@ -21,13 +21,12 @@ See: https://docs.langchain.com/oss/python/langchain/tools for LangChain's stand
 
 import logging
 from typing import Dict, Any, List, Dict as DictType
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
-import os
 from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
 
+from ..llm_registry import get_analyzer_llm
 from ..constants import (
     INTENT_SMALL_TALK,
     TOOL_INSIGHT,
@@ -156,12 +155,8 @@ def analyzer_node(state: Dict) -> Dict:
         )
         
         # Initialize LLM with tools
-        llm = ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-            temperature=0.1,
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
-        
+        llm = get_analyzer_llm()
+
         # Get all available tools and bind to LLM (LangChain pattern)
         # Tools are defined with @tool decorator in chatbot/tools/
         tools = get_all_tools()

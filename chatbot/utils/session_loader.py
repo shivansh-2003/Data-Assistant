@@ -1,7 +1,7 @@
 """Session data loader adapted for InsightBot."""
 
-import os
 import logging
+import os
 from typing import Dict, List, Optional, Any
 import pandas as pd
 import requests

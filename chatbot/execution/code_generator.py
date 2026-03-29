@@ -1,11 +1,10 @@
 """LLM-based pandas code generation."""
 
 import logging
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
-import os
 from typing import Dict, Any
 
+from ..llm_registry import get_code_gen_llm
 from ..prompts import get_code_generator_prompt
 
 logger = logging.getLogger(__name__)
@@ -32,12 +31,8 @@ def generate_pandas_code(query: str, schema: Dict[str, Any], df_names: list) -> 
         )
         
         # Initialize LLM
-        llm = ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-            temperature=0.1,
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
-        
+        llm = get_code_gen_llm()
+
         # Generate code
         response = llm.invoke([
             SystemMessage(content=system_prompt),

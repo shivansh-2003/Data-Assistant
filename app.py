@@ -24,6 +24,7 @@ import base64
 import pickle
 from datetime import datetime
 from data_visualization import render_visualization_tab
+from data_visualization.cache_invalidation import on_data_changed
 from chatbot.streamlit_ui import render_chatbot_tab
 from components.data_table import render_advanced_table
 from components.empty_state import render_empty_state
@@ -60,7 +61,7 @@ SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 # MCP Configuration
 MCP_SERVER_URL = "https://data-assistant-hj5f.onrender.com/data/mcp"
 OPENAI_API_KEY = get_secret("openai.api_key", "OPENAI_API_KEY")
-OPENAI_MODEL = "gpt-5.1"  # Fallback to gpt-4o if not specified
+OPENAI_MODEL = get_secret("openai.model", "OPENAI_MODEL", "gpt-4o")
 
 # Page configuration
 st.set_page_config(
@@ -229,6 +230,24 @@ st.markdown("""
         margin-bottom: 0.5rem;
         letter-spacing: -0.5px;
         font-family: var(--font-sans);
+    }
+    .hero-section {
+        background: linear-gradient(135deg, var(--glass-bg) 0%, var(--primary-50) 100%);
+        border: 1px solid var(--glass-border);
+        border-radius: var(--radius-lg);
+        padding: 1.5rem 1.5rem 1.25rem;
+        margin-bottom: 1rem;
+        box-shadow: var(--shadow-sm);
+    }
+    .skeleton {
+        background: linear-gradient(90deg, var(--border) 25%, var(--card-bg) 50%, var(--border) 75%);
+        background-size: 200% 100%;
+        animation: skeletonShine 1.2s ease-in-out infinite;
+        border-radius: var(--radius-sm);
+    }
+    @keyframes skeletonShine {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
     }
     .section-title {
         font-size: var(--text-xl);
@@ -443,13 +462,22 @@ st.markdown("""
             min-height: 44px;
         }
     }
+    /* Respect user motion preference */
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+        }
+    }
     </style>
 """, unsafe_allow_html=True)
 
 
-def card_open(class_name: str = "card-elevated"):
+def card_open(class_name: str = "card-elevated", aria_label: str | None = None):
     """Render opening div for a card wrapper. Call card_close() after content."""
-    st.markdown(f'<div class="{class_name}" role="region">', unsafe_allow_html=True)
+    attr = f' aria-label="{aria_label}"' if aria_label else ""
+    st.markdown(f'<div class="{class_name}" role="region"{attr}>', unsafe_allow_html=True)
 
 
 def card_close():
@@ -586,15 +614,12 @@ def analyze_data_sync(session_id: str, query: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+@st.cache_data(ttl=30, show_spinner=False)
 def get_session_tables_for_display(session_id: str) -> Optional[Dict]:
     """
     Fetch current tables from session for display.
-    
-    Args:
-        session_id: Session ID to fetch tables for
-        
-    Returns:
-        Dict with session data or None if error
+    Cached for 30s so the sidebar and manipulation tab don't hit the API
+    on every Streamlit rerender.
     """
     try:
         response = requests.get(
@@ -605,19 +630,15 @@ def get_session_tables_for_display(session_id: str) -> Optional[Dict]:
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching session tables: {e}")
         return None
 
 
+@st.cache_data(ttl=30, show_spinner=False)
 def get_session_metadata_for_display(session_id: str) -> Optional[Dict]:
     """
     Fetch session metadata.
-    
-    Args:
-        session_id: Session ID to fetch metadata for
-        
-    Returns:
-        Dict with metadata or None if error
+    Cached for 30s — the sidebar calls this on every page render, so without
+    caching it would add a round-trip to Render.com on every widget interaction.
     """
     try:
         response = requests.get(
@@ -845,10 +866,10 @@ def render_onboarding_tip(title: str, steps: List[str], cta_label: Optional[str]
 
 def render_upload_tab():
     """Render the Upload tab content."""
-    card_open("card-elevated")
+    card_open("card-elevated hero-section")
     st.markdown('<p class="section-subtitle" style="margin-top:0;">Upload Your Data</p>', unsafe_allow_html=True)
-    st.header("📤 Upload Your Data")
-    st.caption("Drag & drop or click to upload. We will extract tables and prepare them for analysis.")
+    st.markdown('<h1 class="main-header">📤 Upload Your Data</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="section-subtitle">Drag & drop or click to upload. We will extract tables and prepare them for analysis.</p>', unsafe_allow_html=True)
 
     render_onboarding_tip(
         "Upload in 3 steps",
@@ -898,17 +919,6 @@ def render_upload_tab():
         help="Supported formats: CSV, Excel, Images"
     )
     st.caption("CSV, Excel, Images supported. Max 100MB. For large files, prefer CSV or Excel for faster processing.")
-    card_close()
-    
-    # Detect file clear/removal - cleanup Redis
-    current_file_id = uploaded_file.file_id if uploaded_file else None
-    if st.session_state.last_file_id and current_file_id != st.session_state.last_file_id:
-        # File was removed or changed - cleanup old session
-        cleanup_current_session()
-        st.session_state.last_ingestion_result = None
-        st.session_state.last_ingestion_file_id = None
-    st.session_state.last_file_id = current_file_id
-    
     # Optional file type hint (synced with pills)
     opts = ["Auto-detect", "csv", "excel", "pdf", "image"]
     idx = opts.index(st.session_state.upload_file_type_hint) if st.session_state.upload_file_type_hint in opts else 0
@@ -921,11 +931,8 @@ def render_upload_tab():
     )
     st.session_state.upload_file_type_hint = file_type_hint
     file_type = None if file_type_hint == "Auto-detect" else file_type_hint
-    
-    # Session ID (optional)
     session_id = st.text_input("Session ID (Optional)", help="Optional session identifier for tracking")
-    
-    # Upload button
+    upload_button = False
     if uploaded_file is not None:
         col1, col2 = st.columns([1, 4])
         with col1:
@@ -934,30 +941,38 @@ def render_upload_tab():
                 type="primary",
                 help="Upload the file and extract tables for analysis"
             )
-        
-        if upload_button:
-            with st.status("Uploading and processing file...", expanded=True) as status:
-                progress = st.progress(0)
-                progress.progress(0.2, text="Uploading file")
-                result = upload_file(uploaded_file, file_type, session_id if session_id else None)
-                progress.progress(0.8, text="Extracting tables")
-                st.session_state.last_ingestion_result = result
-                st.session_state.last_ingestion_file_id = current_file_id
-                render_ingestion_result(result, session_id_input=session_id)
-                progress.progress(1.0, text="Completed")
-                status.update(label="Processing complete", state="complete")
-        elif (
-            st.session_state.last_ingestion_result
-            and st.session_state.last_ingestion_file_id == current_file_id
-        ):
-            render_ingestion_result(st.session_state.last_ingestion_result, session_id_input=session_id)
+    card_close()
     
-    else:
+    # Detect file clear/removal - cleanup Redis
+    current_file_id = uploaded_file.file_id if uploaded_file else None
+    if st.session_state.last_file_id and current_file_id != st.session_state.last_file_id:
+        # File was removed or changed - cleanup old session
+        cleanup_current_session()
+        st.session_state.last_ingestion_result = None
+        st.session_state.last_ingestion_file_id = None
+    st.session_state.last_file_id = current_file_id
+    
+    if upload_button:
+        with st.status("Uploading and processing file...", expanded=True) as status:
+            progress = st.progress(0)
+            progress.progress(0.2, text="Uploading file")
+            result = upload_file(uploaded_file, file_type, session_id if session_id else None)
+            progress.progress(0.8, text="Extracting tables")
+            st.session_state.last_ingestion_result = result
+            st.session_state.last_ingestion_file_id = current_file_id
+            render_ingestion_result(result, session_id_input=session_id)
+            progress.progress(1.0, text="Completed")
+            status.update(label="Processing complete", state="complete")
+    elif (
+        st.session_state.last_ingestion_result
+        and st.session_state.last_ingestion_file_id == current_file_id
+    ):
+        render_ingestion_result(st.session_state.last_ingestion_result, session_id_input=session_id)
+    elif uploaded_file is None:
         # No file uploaded - cleanup any existing session
         cleanup_current_session()
         st.session_state.last_ingestion_result = None
         st.session_state.last_ingestion_file_id = None
-        
         render_empty_state(
             title="No data loaded yet",
             message="Upload a CSV, Excel, or image file above to extract tables and start exploring.",
@@ -988,7 +1003,8 @@ def render_upload_tab():
             """)
 
     st.divider()
-    st.subheader("🌐 Upload From URL")
+    card_open("card-elevated")
+    st.markdown('<h2 class="section-title">🌐 Upload From URL</h2>', unsafe_allow_html=True)
     with st.expander("Import a file from a URL", expanded=False):
         url_input = st.text_input(
             "File URL (http/https)",
@@ -1018,9 +1034,11 @@ def render_upload_tab():
                     render_ingestion_result(result, session_id_input=url_session_id)
                     progress.progress(1.0, text="Completed")
                     status.update(label="Processing complete", state="complete")
+    card_close()
 
     st.divider()
-    st.subheader("🧩 Import From Supabase")
+    card_open("card-elevated")
+    st.markdown('<h2 class="section-title">🧩 Import From Supabase</h2>', unsafe_allow_html=True)
     with st.expander("Connect using Postgres connection string", expanded=False):
         project_name = st.text_input(
             "Project Name (Optional)",
@@ -1060,12 +1078,28 @@ def render_upload_tab():
                     render_ingestion_result(result, session_id_input=supabase_session_id)
                     progress.progress(1.0, text="Completed")
                     status.update(label="Import complete", state="complete")
+    card_close()
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def _fetch_version_graph(session_id: str) -> dict:
+    """Cached fetch of the version history graph. TTL=15s for near-realtime feel."""
+    response = requests.get(
+        f"{FASTAPI_URL}/api/session/{session_id}/versions", timeout=5
+    )
+    response.raise_for_status()
+    return response.json().get("graph", {"nodes": [], "edges": []})
 
 
 def render_manipulation_tab():
     """Render the Data Manipulation tab content."""
-    st.header("🔧 Data Manipulation")
-    st.caption("Use natural language to transform your data. Each operation creates a new version you can revisit.")
+    st.markdown(
+        '<div class="hero-section" role="region" aria-label="Data Manipulation">'
+        '<h1 class="main-header">🔧 Data Manipulation</h1>'
+        '<p class="section-subtitle">Use natural language to transform your data. Each operation creates a new version you can revisit.</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     render_onboarding_tip(
         "Try a transformation",
@@ -1112,11 +1146,15 @@ def render_manipulation_tab():
             del st.query_params["sid"]
         return
     
-    # Extend session TTL on access
-    try:
-        requests.post(f"{SESSION_ENDPOINT}/{session_id}/extend", timeout=5)
-    except:
-        pass  # Non-critical, continue anyway
+    # Extend session TTL on access — throttled to once per minute to avoid
+    # an extra HTTP call on every widget interaction within the tab.
+    _extend_key = f"_last_extend_{session_id}"
+    if time.time() - st.session_state.get(_extend_key, 0) > 60:
+        try:
+            requests.post(f"{SESSION_ENDPOINT}/{session_id}/extend", timeout=5)
+        except:
+            pass
+        st.session_state[_extend_key] = time.time()
     
     # Session Info Card
     card_open("card-elevated")
@@ -1164,7 +1202,7 @@ def render_manipulation_tab():
     card_close()
     
     # Version History Graph Section
-    card_open("card-elevated")
+    card_open("card-elevated", aria_label="Version history")
     st.subheader("📜 Version History")
     st.caption("Track transformations over time. Filter versions and branch safely.")
     
@@ -1204,11 +1242,8 @@ def render_manipulation_tab():
         return {"nodes": nodes_sorted, "edges": edges_filtered}
     
     try:
-        response = requests.get(f"{FASTAPI_URL}/api/session/{session_id}/versions", timeout=5)
-        response.raise_for_status()
-        graph_data = response.json().get("graph", {"nodes": [], "edges": []})
+        graph_data = _fetch_version_graph(session_id)
     except Exception:
-        st.info("No version history yet. Perform operations to build the graph.")
         graph_data = {"nodes": [], "edges": []}
     
     # Filters and layout
@@ -1247,6 +1282,7 @@ def render_manipulation_tab():
         current_version = metadata.get("current_version", "v0")
         if st.session_state.get("manipulation_version_view", "Graph view") == "Timeline view":
             # Timeline view: horizontal version cards
+            st.markdown('<div class="card" role="group" aria-label="Version timeline">', unsafe_allow_html=True)
             st.caption("Click Branch to create a new branch from that version.")
             nodes_list = graph_data.get("nodes", [])
             # Show up to 8 in a row, then next row
@@ -1277,6 +1313,7 @@ def render_manipulation_tab():
                                     st.error("Branch failed")
                             except Exception as e:
                                 st.error(str(e))
+            st.markdown("</div>", unsafe_allow_html=True)
             st.markdown("---")
         else:
             # Graph view
@@ -1378,7 +1415,13 @@ def render_manipulation_tab():
                         except Exception as e:
                             st.error(f"Error pruning: {e}")
     else:
-        st.info("📝 Upload a file and perform operations to see version history.")
+        render_empty_state(
+            title="No versions yet",
+            message="Run a transformation above to build the version history graph.",
+            primary_action_label="Try a query",
+            primary_action_key="empty_version_history_try",
+            icon="📜",
+        )
     
     card_close()
     
@@ -1456,6 +1499,14 @@ def render_manipulation_tab():
                 version_id = op.get("version_id", "")
                 version_text = f" [{version_id}]" if version_id else ""
                 st.text(f"{idx}. [{dt.strftime('%H:%M:%S')}]{version_text} {op.get('description', op.get('operation', 'Unknown'))}")
+    else:
+        render_empty_state(
+            title="No operations yet",
+            message="Execute a natural language query above to see operations here.",
+            primary_action_label="Execute query",
+            primary_action_key="empty_op_history_execute",
+            icon="🔧",
+        )
     
     card_close()
     
@@ -1479,29 +1530,26 @@ def render_manipulation_tab():
                 result = analyze_data_sync(session_id, query)
                 
                 if result.get("success"):
-                    # Wait a bit for MCP server to update Redis
-                    time.sleep(2)  # Increased wait time for Redis update
                     progress.progress(0.7, text="Updating session state")
-                    
-                    # Verify the update was successful by checking if data changed
-                    new_tables_data = get_session_tables_for_display(session_id)
-                    if not new_tables_data:
-                        st.warning("⚠️ Could not verify data update. Please refresh manually.")
-                    
+
+                    # Bust all app-level caches so the next render shows fresh data
+                    on_data_changed()
+                    get_session_metadata_for_display.clear()
+                    get_session_tables_for_display.clear()
+                    get_full_table_dataframe.clear()
+                    _fetch_version_graph.clear()
+
                     # Create new version after successful operation
                     try:
                         # Get current version from metadata
                         current_metadata = get_session_metadata_for_display(session_id)
                         current_vid = current_metadata.get("current_version", "v0") if current_metadata else "v0"
-                        
+
                         # Get graph to determine next version number
-                        graph_response = requests.get(f"{FASTAPI_URL}/api/session/{session_id}/versions", timeout=5)
-                        if graph_response.status_code == 200:
-                            graph_data = graph_response.json().get("graph", {"nodes": []})
-                            # Generate new version ID
+                        try:
+                            graph_data = _fetch_version_graph(session_id)
                             new_vid = f"v{len(graph_data.get('nodes', []))}"
-                        else:
-                            # Fallback: use UUID short
+                        except Exception:
                             new_vid = f"v_{str(uuid.uuid4())[:8]}"
                         
                         # Extract operation description from query (first 50 chars)
@@ -1562,7 +1610,8 @@ def render_manipulation_tab():
     st.divider()
     
     # Current Data Explorer
-    st.subheader("📊 Current Data Explorer")
+    card_open("card-elevated")
+    st.markdown('<h2 class="section-title">📊 Current Data Explorer</h2>', unsafe_allow_html=True)
     if tables and selected_table:
         full_df = get_full_table_dataframe(session_id, selected_table)
         if full_df is not None and not full_df.empty:
@@ -1584,6 +1633,7 @@ def render_manipulation_tab():
             )
         else:
             st.info("Full table data not available.")
+    card_close()
 
 
 def _render_sidebar_session_block():
@@ -1609,6 +1659,7 @@ def _render_sidebar_session_block():
                 last_modified = str(created_at)[:16]
         except Exception:
             pass
+    st.markdown('<div class="card" role="region" aria-label="Current data session">', unsafe_allow_html=True)
     st.subheader("📂 Current data")
     st.caption(file_name)
     st.caption(f"Tables: {table_count}" + (f" · {last_modified}" if last_modified else ""))
@@ -1621,6 +1672,7 @@ def _render_sidebar_session_block():
         if st.button("Upload new", key="sidebar_upload_new", help="Clear session; use Upload tab to add new data"):
             cleanup_current_session()
             st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
     st.divider()
 
 
@@ -1682,6 +1734,7 @@ def main():
         # Compact session block when data is loaded
         _render_sidebar_session_block()
 
+        st.markdown('<div class="card" role="region" aria-label="Theme settings">', unsafe_allow_html=True)
         st.subheader("🎨 Theme")
         st.session_state.ui_theme = st.selectbox(
             "Choose theme",
@@ -1690,8 +1743,9 @@ def main():
             help="Auto uses your system setting.",
             key="theme_select"
         )
-        
-        # API Health Check
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown('<div class="card" role="region" aria-label="API status">', unsafe_allow_html=True)
         st.subheader("API Status")
         api_ok = check_api_health()
         if api_ok:
@@ -1707,8 +1761,9 @@ def main():
                 st.error("❌ FastAPI server is not running")
             st.markdown('<span class="status-badge">Offline</span>', unsafe_allow_html=True)
             st.warning("Please start the FastAPI server:\n```bash\npython main.py\n```")
-        
-        # MCP Server Status
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown('<div class="card" role="region" aria-label="MCP server status">', unsafe_allow_html=True)
         st.subheader("MCP Server Status")
         if OPENAI_API_KEY:
             st.success("✅ OpenAI API key configured")
@@ -1716,25 +1771,29 @@ def main():
         else:
             st.warning("⚠️ OPENAI_API_KEY not set")
             st.caption("Required for Data Manipulation tab")
-        
+        st.markdown("</div>", unsafe_allow_html=True)
+
         # API Configuration
         config = get_api_config()
         if config:
+            st.markdown('<div class="card" role="region" aria-label="API configuration">', unsafe_allow_html=True)
             st.subheader("📋 Configuration")
             st.info(f"Max file size: {config.get('max_file_size_mb', 'N/A')} MB")
             st.info(f"Max tables per file: {config.get('max_tables_per_file', 'N/A')}")
-            
             supported = config.get('supported_formats', {})
             if supported:
                 st.write("**Supported formats:**")
                 for fmt, exts in supported.items():
                     st.write(f"- {fmt.upper()}: {', '.join(exts)}")
+            st.markdown("</div>", unsafe_allow_html=True)
 
+        st.markdown('<div class="card" role="region" aria-label="Onboarding">', unsafe_allow_html=True)
         st.subheader("🚀 Onboarding")
         if st.toggle("Show onboarding tips", value=st.session_state.show_onboarding, key="onboarding_toggle"):
             st.session_state.show_onboarding = True
         else:
             st.session_state.show_onboarding = False
+        st.markdown("</div>", unsafe_allow_html=True)
         
         st.divider()
         st.caption("Made with ❤️ for data analysts")

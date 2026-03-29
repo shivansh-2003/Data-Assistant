@@ -4,18 +4,14 @@ Visualization Centre — thin orchestrator: theme, data, controls, chart, export
 
 from __future__ import annotations
 
-import os
-from typing import Optional
-
 import pandas as pd
-import requests
 import streamlit as st
 
 from components.empty_state import render_empty_state
 
-from .core.data_fetcher import get_dataframe_from_session
+from .core.data_fetcher import get_dataframe_from_session, get_tables_from_session
 from .dashboard_builder import DashboardBuilder
-from .smart_recommendations import get_chart_recommendations
+from .intelligence.recommender import get_chart_recommendations
 from .theme.css import inject_viz_css
 from .ui.chart_display import render_main_chart
 from .ui.controls import render_chart_controls
@@ -27,9 +23,6 @@ from .ui.toolbar import render_action_bar
 
 # Public API for other modules & tests
 from .core.chart_generator import generate_chart, generate_from_config  # noqa: F401
-
-FASTAPI_URL = os.getenv("FASTAPI_URL", "https://data-assistant-hj5f.onrender.com")
-SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 _default_dashboard_builder = DashboardBuilder()
 
@@ -55,27 +48,18 @@ def render_visualization_tab() -> None:
         )
         return
 
-    try:
-        response = requests.get(
-            f"{SESSION_ENDPOINT}/{session_id}/tables",
-            params={"format": "summary"},
-            timeout=10,
-        )
-        response.raise_for_status()
-        tables_data = response.json()
-        tables = tables_data.get("tables", {})
-        if not tables:
-            st.warning("⚠️ No tables found in session. Please upload a file first.")
-            return
-        table_names = list(tables.keys())
-        if len(table_names) > 1:
-            selected_table = st.selectbox("Select table to visualize", table_names, key="viz_table_select")
-        else:
-            selected_table = table_names[0]
-        df = get_dataframe_from_session(session_id, selected_table)
-    except Exception as e:
-        st.error(f"❌ Error loading session data: {e}")
+    tables = get_tables_from_session(session_id)
+    if not tables:
+        st.warning("⚠️ No tables found in session. Please upload a file first.")
         return
+
+    table_names = list(tables.keys())
+    if len(table_names) > 1:
+        selected_table = st.selectbox("Select table to visualize", table_names, key="viz_table_select")
+    else:
+        selected_table = table_names[0]
+
+    df = get_dataframe_from_session(session_id, selected_table)
 
     if df is None or df.empty:
         st.warning("⚠️ No data available for visualization.")

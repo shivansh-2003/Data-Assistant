@@ -80,7 +80,7 @@ Layout presets for lower-level grids are listed in **`config.DASHBOARD_LAYOUT_PR
 
 ## Smart recommendations
 
-**`get_chart_recommendations`** (`smart_recommendations.py`) — LLM-assisted (with heuristic fallback) ranked suggestions; returns structures compatible with **`ChartRecommendation`**.
+**`get_chart_recommendations`** (`intelligence/recommender.py`) — LLM-assisted (with heuristic fallback) ranked suggestions; returns structures compatible with **`ChartRecommendation`**.
 
 ## Module layout
 
@@ -92,7 +92,7 @@ data_visualization/
 ├── utils.py
 ├── chart_compositions.py     # Composition helpers + `generate_combo_chart` (public API)
 ├── dashboard_builder.py      # DashboardBuilder
-├── smart_recommendations.py
+├── intelligence/recommender.py
 ├── core/
 │   ├── chart_config.py
 │   ├── chart_generator.py
@@ -155,6 +155,10 @@ When adding a chart type:
 4. Extend **`ChartConfig`** only if new fields are required; keep **`normalized()`** and **`cache_key_tuple()`** in sync.
 
 Update this README when the public API or registry changes.
+
+## Session data caching
+
+**`core/data_fetcher.py`** uses a three-layer cache (session state hot cache → `@st.cache_data` TTL → FastAPI). **`invalidate_viz_cache()`** bumps a version counter; **`cache_invalidation.on_data_changed()`** (called from `app.py` after data manipulation) coordinates full busts so tables and charts stay in sync.
 
 ---
 

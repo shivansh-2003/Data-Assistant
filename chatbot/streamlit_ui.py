@@ -12,6 +12,7 @@ from .ui import (
     handle_chat_input,
     generate_chart_from_config_ui,
 )
+from components.empty_state import render_empty_state
 
 logger = logging.getLogger(__name__)
 
@@ -31,41 +32,40 @@ CHATBOT_CSS = """
   .insightbot-timestamp { font-size: 0.7rem; opacity: 0.7; }
   .insightbot-key-finding { background: var(--primary-50, #eef2ff); border-left: 4px solid var(--primary-600, #667eea); padding: 0.75rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-weight: 500; }
   .insightbot-analyzing { animation: pulse 2s ease-in-out infinite; }
+  .action-bar { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color, #e5e7eb); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 </style>
 """
 
 
-def show_upload_warning():
-    """Display when no session is active."""
-    st.info("👆 **No data loaded.** Upload a file in the **Upload** tab to start asking questions.")
-    with st.expander("Example questions (after you upload data)"):
-        st.markdown("""
-        - *What's the average X by Y?*
-        - *Show me the top 10 by Z*
-        - *Plot X over time as a line chart*
-        - *Compare X across categories*
-        - *Summarize the main table*
-        """)
 
 
 def render_chatbot_tab():
     """Main function to render the InsightBot chatbot tab."""
     st.markdown(CHATBOT_CSS, unsafe_allow_html=True)
 
-    col_title, col_pill = st.columns([1, 0.35])
-    with col_title:
-        st.markdown("### 💬 InsightBot")
-        st.caption("Ask questions in plain language. Get insights, tables, and charts from your data.")
     session_id = st.session_state.get("current_session_id")
 
     if not session_id:
-        show_upload_warning()
+        render_empty_state(
+            title="No data loaded yet",
+            message="Upload a file in the Upload tab to start asking questions.",
+            primary_action_label="Go to Upload",
+            primary_action_key="empty_chatbot_upload",
+            secondary_action_label="Example questions",
+            secondary_action_key="empty_chatbot_examples",
+            icon="💬",
+        )
         return
 
+    st.markdown('<div class="card-elevated hero-section" role="region" aria-label="Chatbot header">', unsafe_allow_html=True)
+    col_title, col_pill = st.columns([1, 0.35])
+    with col_title:
+        st.markdown('<h2 class="section-title">💬 InsightBot</h2>', unsafe_allow_html=True)
+        st.markdown('<p class="section-subtitle">Ask questions in plain language. Get insights, tables, and charts from your data.</p>', unsafe_allow_html=True)
     with col_pill:
         display_session_pill(session_id)
-
+    st.markdown("</div>", unsafe_allow_html=True)
     st.divider()
 
     config = {"configurable": {"thread_id": session_id}}
@@ -93,6 +93,7 @@ def render_chatbot_tab():
                 help="Explorer: curious, suggestive. Technical: emphasize code. Executive: short, KPI-focused.",
             )
             st.markdown("---")
+            st.markdown('<div class="card" role="region" aria-label="Quick questions">', unsafe_allow_html=True)
             st.markdown("**Quick questions**")
             if st.button("📊 Summary stats", key="qa_summary", use_container_width=True):
                 st.session_state["pending_chat_query"] = "Show summary statistics for the main table"
@@ -111,6 +112,7 @@ def render_chatbot_tab():
                 if st.button("🗑️ Clear chat", key="clear_chat", use_container_width=True):
                     logger.info("Clearing chat history")
                     st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
 
         if current_state and current_state.values:
             messages = current_state.values.get("messages", [])
