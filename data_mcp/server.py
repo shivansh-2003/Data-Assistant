@@ -9,7 +9,17 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from data import mcp
+try:
+    from data_mcp.data import mcp
+except ImportError:
+    from data import mcp
+
+try:
+    import data_mcp.resources as _mcp_resources  # noqa: F401
+    import data_mcp.prompt_workflows as _mcp_prompts  # noqa: F401
+except ImportError:
+    import resources as _mcp_resources  # noqa: F401
+    import prompt_workflows as _mcp_prompts  # noqa: F401
 
 # Create ASGI app from MCP server
 # Use /mcp so the full endpoint is /data/mcp

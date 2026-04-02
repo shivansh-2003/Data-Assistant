@@ -19,7 +19,32 @@ This guide is for validating `data-mcp-2/server.py` manually using MCP Inspector
 Expected:
 - Connection succeeds.
 - “Tools” tab lists server tools.
+- **Resources** tab lists URIs such as `session://{session_id}/summary`, `session://{session_id}/tables/{table_name}/preview`, `session://{session_id}/operations`, `session://{session_id}/data-quality/{table_name}`.
+- **Prompts** tab lists workflow prompts (`data_cleaning_workflow`, `exploratory_analysis`, etc.).
 - No 404 errors in the server logs.
+
+### Resources
+
+1. Pick a real `session_id` and substitute into a template URI (e.g. `session://YOUR_ID/summary`).
+2. Use Inspector “Read resource” (or client `resources/read`).
+3. Expect Markdown text; missing sessions/tables should return an error section, not crash.
+
+### Prompts
+
+1. List prompts; run one with `session_id` (+ `table_name` / `target_column` as required).
+2. Expect a string template suitable for driving tool use.
+
+### Progress-aware tools
+
+Tools `merge_data_tables` and `remove_outliers_from_table` are async and call `report_progress`. Progress appears only if the client sends a progress token; otherwise calls should still succeed.
+
+### Elicitation
+
+Tool `guided_data_cleaning` requires a client with elicitation support. Without it, the call should fail with an explicit unsupported error from the stack.
+
+### Schema validation
+
+Tool `validate_table_schema` with `expected_schema` e.g. `{"col_a": "string", "col_b": "float"}` should return `missing_columns`, `extra_columns`, and `type_mismatches`.
 
 ## Core Server Health
 

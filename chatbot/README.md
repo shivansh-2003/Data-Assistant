@@ -125,24 +125,195 @@ Defined in `state.py` as a `TypedDict`. DataFrames are not stored in state; they
 
 ```mermaid
 flowchart TD
-    A[User query] --> B[Router]
-    B --> C{Intent / Clarification?}
-    C -->|needs_clarification| D[Clarification → END]
-    C -->|small_talk| E[Responder]
-    C -->|summarize_last| F[Insight]
-    C -->|data / viz / report| G[Analyzer]
-    G --> H{route_after_analyzer}
-    H -->|insight_tool + complex| I[Planner]
-    H -->|insight_tool + simple ~80%| L[Insight]
-    H -->|viz only| J[Viz]
-    H -->|no tools| K[Responder]
-    I --> L
-    L --> M{viz in tool_calls?}
-    M -->|Yes| J
-    M -->|No| K
-    J --> K
-    K --> N[Suggestion]
-    N --> O[END]
+    %% ─────────────────────────────────────────
+    %%  ENTRY
+    %% ─────────────────────────────────────────
+    USER(["👤 User Query\n(Streamlit UI)"])
+    SESSION["SessionLoader\nLoad schema + df_dict\nfrom Redis by session_id"]
+    USER --> SESSION --> ROUTER
+
+    %% ─────────────────────────────────────────
+    %%  ROUTER NODE
+    %% ─────────────────────────────────────────
+    subgraph ROUTER_NODE ["🟣 ROUTER NODE  ·  gpt-4o-mini  (temp=0.0, max_tokens=256)"]
+        ROUTER["Intent Classification\ndata_query / visualization_request\nsmall_talk / report / summarize_last"]
+        FOLLOWUP{"is_follow_up?"}
+        RESOLVER["Context Resolver\ngpt-4o-mini (max_tokens=128)\nResolve short follow-up\n→ effective_query"]
+        AMBIGUITY{"Column\nAmbiguity?"}
+        ROUTER --> FOLLOWUP
+        FOLLOWUP -->|"Yes"| RESOLVER --> AMBIGUITY
+        FOLLOWUP -->|"No"| AMBIGUITY
+    end
+
+    %% ─────────────────────────────────────────
+    %%  ROUTING DECISION FROM ROUTER
+    %% ─────────────────────────────────────────
+    AMBIGUITY -->|"Multiple columns\nmatch term"| CLARIFY
+    AMBIGUITY -->|"small_talk"| RESPONDER
+    AMBIGUITY -->|"summarize_last"| INSIGHT
+    AMBIGUITY -->|"data_query /\nviz / report"| ANALYZER
+
+    %% ─────────────────────────────────────────
+    %%  CLARIFICATION NODE
+    %% ─────────────────────────────────────────
+    subgraph CLARIFY_NODE ["🔴 CLARIFICATION NODE"]
+        CLARIFY["Emit: 'Did you mean X or Y?'\nStore clarification_options\nclarification_original_query"]
+    end
+    CLARIFY --> END1(["END\n(wait for next turn)"])
+
+    %% ─────────────────────────────────────────
+    %%  ANALYZER NODE
+    %% ─────────────────────────────────────────
+    subgraph ANALYZER_NODE ["🟠 ANALYZER NODE  ·  gpt-4o  (temp=0.1)"]
+        ANALYZER["LLM Function Calling\nllm.bind_tools(all_tools)\nSelect tools + params\nbased on schema + intent"]
+        COERCE["Post-process:\nCorrelation query?\nCoerce bar/scatter → heatmap_chart"]
+        ANALYZER --> COERCE
+    end
+
+    COERCE --> ANALYZER_ROUTE{"route_after_\nanalyzer()"}
+    ANALYZER_ROUTE -->|"insight_tool\nselected"| PLANNER_GATE
+    ANALYZER_ROUTE -->|"viz tools only\n(no insight_tool)"| VIZ
+    ANALYZER_ROUTE -->|"no tools /\nsmall_talk"| RESPONDER
+
+    %% ─────────────────────────────────────────
+    %%  PLANNER GATE  (complexity check in graph.py)
+    %% ─────────────────────────────────────────
+    subgraph PLANNER_GATE_BOX ["⚡ PLANNER SKIP GATE  (graph.py)"]
+        PLANNER_GATE{"Complex query?\nKeywords: yoy · rolling avg\ncohort · percentile · trend\nSub-intent: trend/correlate/report\nor query > 25 words"}
+    end
+
+    PLANNER_GATE -->|"~20% complex"| PLANNER
+    PLANNER_GATE -->|"~80% simple\n(skip saves ~2s)"| INSIGHT
+
+    %% ─────────────────────────────────────────
+    %%  PLANNER NODE
+    %% ─────────────────────────────────────────
+    subgraph PLANNER_NODE ["🔥 PLANNER NODE  ·  gpt-4o  (temp=0.1)"]
+        PLANNER["Break query into\nmulti-step plan\n[{step, description, code, output_var}]"]
+    end
+    PLANNER --> INSIGHT
+
+    %% ─────────────────────────────────────────
+    %%  INSIGHT NODE
+    %% ─────────────────────────────────────────
+    subgraph INSIGHT_NODE ["🔵 INSIGHT NODE"]
+        INSIGHT["Load DataFrames\nfrom Redis"]
+        SUMMARIZE_CHECK{"intent ==\nsummarize_last?"}
+        SUMMARIZE_LAST["Re-summarize\nlast_insight\ngpt-4o-mini"]
+        RULE_CHECK{"Rule-based\nexecutor match?\nmean/sum/count/min/max"}
+        RULE_EXEC["rule_based_executor.py\nDirect pandas ops\n0 LLM calls · ~2.5s saved"]
+        PLAN_CHECK{"plan\nexists?"}
+        PLAN_EXEC["Execute plan steps\nsequentially\n_execute_plan()"]
+        CODE_GEN["code_generator.py\ngpt-4o generates\npandas code"]
+        SAFE_EXEC["safe_executor.py\nRestricted namespace\nTimeout + guardrails\nRow limit 100k"]
+        SUMMARIZER["Summarize result\ngpt-4o-mini\n(max_tokens=256)\n→ last_insight"]
+
+        INSIGHT --> SUMMARIZE_CHECK
+        SUMMARIZE_CHECK -->|"Yes"| SUMMARIZE_LAST --> RESP_ROUTE2
+        SUMMARIZE_CHECK -->|"No"| RULE_CHECK
+        RULE_CHECK -->|"Yes · ~30% of queries"| RULE_EXEC --> SUMMARIZER
+        RULE_CHECK -->|"No"| PLAN_CHECK
+        PLAN_CHECK -->|"Yes (complex)"| PLAN_EXEC --> SUMMARIZER
+        PLAN_CHECK -->|"No (simple)"| CODE_GEN --> SAFE_EXEC --> SUMMARIZER
+    end
+
+    SUMMARIZER --> VIZ_CHECK{"viz tool\nin tool_calls?"}
+    VIZ_CHECK -->|"Yes"| VIZ
+    VIZ_CHECK -->|"No"| RESPONDER
+
+    %% ─────────────────────────────────────────
+    %%  VIZ NODE
+    %% ─────────────────────────────────────────
+    subgraph VIZ_NODE ["🩵 VIZ NODE"]
+        VIZ["Read chart tool_calls\nValidate config"]
+        REDIS_LOAD["Load DataFrame\nfrom Redis"]
+        PLOTLY["data_visualization module\nBuild Plotly figure"]
+        FALLBACK{"Chart OK?"}
+        CHART_OK["Set viz_config\nviz_type · chart_reason"]
+        CHART_FAIL["Set viz_error\nFallback → table"]
+
+        VIZ --> REDIS_LOAD --> PLOTLY --> FALLBACK
+        FALLBACK -->|"Yes"| CHART_OK
+        FALLBACK -->|"Too many categories\nor other failure"| CHART_FAIL
+    end
+
+    CHART_OK --> RESPONDER
+    CHART_FAIL --> RESPONDER
+
+    %% ─────────────────────────────────────────
+    %%  RESPONDER NODE
+    %% ─────────────────────────────────────────
+    subgraph RESPONDER_NODE ["🟢 RESPONDER NODE"]
+        RESPONDER["Format AIMessage\nInsight text + chart/table\n+ optional 'see code' expander"]
+        SMALL_TALK_RESP{"small_talk?"}
+        ST_LLM["gpt-4o-mini\nFriendly reply"]
+        SNAPSHOT["Append response_snapshot\n(viz_config · insight_data\ngenerated_code · viz_error)\n→ per-turn visualization preserved"]
+
+        RESPONDER --> SMALL_TALK_RESP
+        SMALL_TALK_RESP -->|"Yes"| ST_LLM --> SNAPSHOT
+        SMALL_TALK_RESP -->|"No"| SNAPSHOT
+    end
+
+    RESP_ROUTE2 --> RESPONDER
+
+    %% ─────────────────────────────────────────
+    %%  SUGGESTION NODE
+    %% ─────────────────────────────────────────
+    subgraph SUGGESTION_NODE ["🟡 SUGGESTION NODE  ·  gpt-4o-mini  (temp=0.4, max_tokens=128)"]
+        SUGGEST["Generate 3 follow-up\nquestion chips"]
+        FALLBACK_CHIPS["Intent-aware pre-defined\nfallbacks if LLM fails\n(chips always appear)"]
+        SUGGEST -->|"LLM success"| CHIPS["Return 3 chips"]
+        SUGGEST -->|"LLM failure"| FALLBACK_CHIPS --> CHIPS
+    end
+
+    SNAPSHOT --> SUGGEST
+
+    %% ─────────────────────────────────────────
+    %%  MEMORY + STREAM
+    %% ─────────────────────────────────────────
+    CHIPS --> MEMORY["MemorySaver\nCheckpoint\n(thread/session-based)"]
+    MEMORY --> STREAM(["graph.stream(stream_mode='values')\n~1–2s perceived latency\nProgressive status captions\nUI renders on responder completion"])
+
+    %% ─────────────────────────────────────────
+    %%  LLM REGISTRY (cross-cutting)
+    %% ─────────────────────────────────────────
+    subgraph LLM_REG ["🔋 LLM REGISTRY  (llm_registry.py)"]
+        REG["Singleton cache\nOne ChatOpenAI per\n(model · temp · max_tokens)\nSaves ~1.4s per query"]
+    end
+
+    %% ─────────────────────────────────────────
+    %%  STYLES
+    %% ─────────────────────────────────────────
+    style USER fill:#4CAF50,color:#fff
+    style SESSION fill:#607D8B,color:#fff
+    style ROUTER fill:#9C27B0,color:#fff
+    style RESOLVER fill:#AB47BC,color:#fff
+    style CLARIFY fill:#E91E63,color:#fff
+    style END1 fill:#b0bec5,color:#333
+    style ANALYZER fill:#FF9800,color:#fff
+    style COERCE fill:#FFA726,color:#fff
+    style PLANNER_GATE fill:#FF7043,color:#fff
+    style PLANNER fill:#FF5722,color:#fff
+    style INSIGHT fill:#1565C0,color:#fff
+    style SUMMARIZE_LAST fill:#1976D2,color:#fff
+    style RULE_EXEC fill:#0288D1,color:#fff
+    style CODE_GEN fill:#0277BD,color:#fff
+    style SAFE_EXEC fill:#01579B,color:#fff
+    style SUMMARIZER fill:#0D47A1,color:#fff
+    style VIZ fill:#00838F,color:#fff
+    style REDIS_LOAD fill:#00695C,color:#fff
+    style PLOTLY fill:#00796B,color:#fff
+    style CHART_OK fill:#2E7D32,color:#fff
+    style CHART_FAIL fill:#C62828,color:#fff
+    style RESPONDER fill:#388E3C,color:#fff
+    style ST_LLM fill:#43A047,color:#fff
+    style SNAPSHOT fill:#2E7D32,color:#fff
+    style SUGGEST fill:#F9A825,color:#333
+    style FALLBACK_CHIPS fill:#F57F17,color:#fff
+    style CHIPS fill:#F9A825,color:#333
+    style MEMORY fill:#455A64,color:#fff
+    style STREAM fill:#4CAF50,color:#fff
+    style REG fill:#37474F,color:#fff
 ```
 
 **Planner skip complexity gate** (in `graph.py`):
@@ -345,3 +516,128 @@ chatbot/
 - **Streaming + checkpointer:** The `MemorySaver` checkpointer is compatible with `graph.stream()`. Each yielded snapshot reflects the full state after the completed node.
 
 For more test scenarios and migration notes, see `TESTING.md` and `MIGRATION.md` (if present). For implementation history and checklist, see `INSIGHTBOT_IMPLEMENTATION.md`.
+
+
+
+## InsightBot Architecture
+
+InsightBot is a **LangGraph-powered conversational analytics chatbot** built as a `StateGraph`. It's designed to understand natural language queries about your data, run pandas analysis, render charts, and maintain multi-turn conversation memory.
+
+---
+
+### Core Files
+
+| File | Role |
+|---|---|
+| `state.py` | TypedDict defining the full graph state |
+| `graph.py` | StateGraph wiring — nodes, edges, routing logic |
+| `llm_registry.py` | Singleton LLM cache (one `ChatOpenAI` per config tuple) |
+| `streamlit_ui.py` | Streamlit UI, message history, per-turn snapshots |
+| `nodes/` | 8 logical processing nodes |
+| `prompts/` | Modular, versioned prompt files per node |
+| `utils/session_loader.py` | Loads DataFrames from Redis by `session_id` |
+
+---
+
+### The LangGraph Flow
+
+```
+User Query
+    ↓
+[Router] → intent + context resolution
+    ↓
+ ┌──────────────────────────────────┐
+ │  needs_clarification?            │ → [Clarification] → END
+ │  small_talk?                     │ → [Responder]
+ │  summarize_last?                 │ → [Insight]
+ │  data_query / viz / report?      │ → [Analyzer]
+ └──────────────────────────────────┘
+    ↓
+[Analyzer] → tool selection via LLM function calling
+    ↓
+ complex query (~20%)? → [Planner] → [Insight]
+ simple query (~80%)?  →            [Insight]  (planner skipped, saves ~2s)
+    ↓
+[Insight] → rule-based OR LLM code gen + execution + summarization
+    ↓
+ viz tool selected? → [Viz] → Plotly chart or fallback table
+    ↓
+[Responder] → formats final message + appends response_snapshot
+    ↓
+[Suggestion] → 3 follow-up chips (gpt-4o-mini)
+    ↓
+[MemorySaver checkpoint] → stream to UI
+```
+
+---
+
+### The 8 Nodes
+
+**Router** (`router.py`) — uses `gpt-4o-mini` to classify intent (`data_query`, `visualization_request`, `small_talk`, `report`, `summarize_last`), resolve follow-ups like "What about the max?" into full questions, and detect column ambiguity.
+
+**Clarification** (`clarification.py`) — fires when multiple columns match a vague term (e.g. "sales"). Asks "Did you mean X or Y?" and terminates the turn. The next turn resolves the choice.
+
+**Analyzer** (`analyzer.py`) — uses `gpt-4o` with LangChain tool binding. The LLM decides which tools to call (`insight_tool`, `bar_chart`, `line_chart`, `scatter_chart`, `histogram`, `heatmap_chart`, etc.) based on schema + intent.
+
+**Planner** (`planner.py`) — uses `gpt-4o` for genuinely complex multi-step queries (YoY, cohort, rolling average, trend). ~80% of queries skip this node entirely via keyword + sub-intent gate in `graph.py`.
+
+**Insight** (`insight.py`) — the execution engine. Dispatches to either a rule-based executor (mean/sum/count/min/max — zero LLM calls) or LLM code generation (generates pandas code, runs it in a sandbox with timeout and error handling), then summarizes the result with `gpt-4o-mini`.
+
+**Viz** (`viz.py`) — validates chart config, loads data from Redis, builds a Plotly figure via the shared `data_visualization` module. Falls back to a table if the chart fails (e.g. too many categories).
+
+**Responder** (`responder.py`) — formats the final `AIMessage` combining insight text + chart/table + optional "see code" expander. Appends a `response_snapshot` to state so previous turns' visualizations don't disappear.
+
+**Suggestion** (`suggestion_engine.py`) — uses `gpt-4o-mini` to generate 3 contextual follow-up question chips. Has intent-aware pre-defined fallbacks in case LLM fails.
+
+---
+
+### State Schema (key fields)
+
+The `State` TypedDict is what flows through every node:
+
+- **Session:** `session_id`, `messages` (with LangGraph `add_messages` reducer)
+- **Data context:** `schema`, `table_names`, `data_profile`, `operation_history`
+- **Routing:** `intent`, `sub_intent`, `implicit_viz_hint`, `needs_clarification`
+- **Clarification:** `clarification_options`, `clarification_mention`, `clarification_original_query`
+- **Query processing:** `effective_query`, `entities`, `tool_calls`, `plan`, `conversation_context`
+- **Results:** `last_insight`, `insight_data`, `viz_config`, `response_snapshots`
+
+> Note: DataFrames are **never stored in state** (not serializable). They're loaded fresh from Redis per turn via `session_loader.py`.
+
+---
+
+### LLM Strategy
+
+| Node | Model | Reason |
+|---|---|---|
+| Router, Summarizer, Suggestions | `gpt-4o-mini` | Classification/summarization — fast & cheap |
+| Analyzer, Planner, Code Generator | `gpt-4o` | Schema reasoning requires stronger model |
+
+The **LLM Registry** (`llm_registry.py`) ensures only one `ChatOpenAI` instance per `(model, temperature, max_tokens)` tuple is ever created, saving ~1.4s/query from repeated object instantiation.
+
+---
+
+### Prompt System
+
+Each node has its own prompt file under `chatbot/prompts/`:
+
+`router_prompt.py`, `analyzer_prompt.py`, `code_generator_prompt.py`, `summarizer_prompt.py`, `suggestion_prompt.py`, `small_talk_prompt.py`, `context_resolver_prompt.py`, `responder_prompt.py`
+
+Each has a `VERSION` constant and uses `base.py`'s `PromptTemplate` with safe substitution and automatic schema truncation (max 5 tables, 20 columns each) to avoid token bloat.
+
+---
+
+### Latency Targets
+
+| Query type | Wall clock | Perceived (streaming) |
+|---|---|---|
+| Simple stat (avg/sum/count) | ~4s | ~1s |
+| Comparison / groupby | ~6s | ~2s |
+| Visualization | ~5s | ~1.5s |
+| Follow-up | ~7s | ~2s |
+| Complex (YoY, cohort) | ~10s | ~3s |
+| Small talk | ~1s | ~0.5s |
+
+The UI uses `graph.stream(stream_mode='values')` to show progressive status captions and render the response as soon as the responder node completes — before the suggestion node even finishes.
+
+

@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Any
 import pandas as pd
 
 from .core import get_table_data, commit_dataframe, _record_operation
+from .errors import format_error_with_context
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +41,12 @@ def select_columns(
     try:
         df = get_table_data(session_id, table_name)
         if df is None:
-            return {
-                "success": False,
-                "error": f"Table '{table_name}' not found in session {session_id}"
-            }
+            return format_error_with_context(
+                f"Table '{table_name}' not found in session {session_id}",
+                session_id,
+                table_name,
+                suggestions=["Call initialize_data_table or list_tables", "Check session_id"],
+            )
         
         original_columns = list(df.columns)
         
@@ -57,10 +60,15 @@ def select_columns(
         if columns:
             invalid_cols = [col for col in columns if col not in df.columns]
             if invalid_cols:
-                return {
-                    "success": False,
-                    "error": f"Columns not found: {', '.join(invalid_cols)}"
-                }
+                return format_error_with_context(
+                    f"Columns not found: {', '.join(invalid_cols)}",
+                    session_id,
+                    table_name,
+                    mention=invalid_cols[0],
+                    suggestions=[
+                        "Column names are case-sensitive; use get_table_summary for exact names.",
+                    ],
+                )
             selected_set.update(columns)
 
         if pattern:
@@ -144,10 +152,12 @@ def filter_rows(
     try:
         df = get_table_data(session_id, table_name)
         if df is None:
-            return {
-                "success": False,
-                "error": f"Table '{table_name}' not found in session {session_id}"
-            }
+            return format_error_with_context(
+                f"Table '{table_name}' not found in session {session_id}",
+                session_id,
+                table_name,
+                suggestions=["Call initialize_data_table or list_tables", "Check session_id"],
+            )
         
         original_count = len(df)
         
@@ -192,17 +202,21 @@ def filter_rows(
                 else:
                     condition = normalized
             if 'df_filtered' not in locals():
-                return {
-                    "success": False,
-                    "error": (
-                        f"Invalid condition '{condition}': {str(e)}. "
-                        "Use a pandas-style boolean expression, e.g. "
-                        "'Price > 11', 'Company == \"Apple\"', "
-                        "'Company == \"Apple\" and Ram >= 8'. "
-                        "Column names are case-sensitive; available columns: "
-                        f"{', '.join(df.columns)}"
-                    )
-                }
+                err = (
+                    f"Invalid condition '{condition}': {str(e)}. "
+                    "Use a pandas-style boolean expression, e.g. "
+                    "'Price > 11', 'Company == \"Apple\"', "
+                    "'Company == \"Apple\" and Ram >= 8'."
+                )
+                return format_error_with_context(
+                    err,
+                    session_id,
+                    table_name,
+                    suggestions=[
+                        "Column names are case-sensitive; see context.columns.",
+                        f"Available: {', '.join(df.columns)}",
+                    ],
+                )
         
         filtered_count = len(df_filtered)
         dropped_count = original_count - filtered_count
@@ -272,10 +286,12 @@ def sample_rows(
     try:
         df = get_table_data(session_id, table_name)
         if df is None:
-            return {
-                "success": False,
-                "error": f"Table '{table_name}' not found in session {session_id}"
-            }
+            return format_error_with_context(
+                f"Table '{table_name}' not found in session {session_id}",
+                session_id,
+                table_name,
+                suggestions=["Call initialize_data_table or list_tables", "Check session_id"],
+            )
         
         original_count = len(df)
         
@@ -306,10 +322,12 @@ def sample_rows(
                 }
 
         if by is not None and by not in df.columns:
-            return {
-                "success": False,
-                "error": f"Column '{by}' not found in table"
-            }
+            return format_error_with_context(
+                f"Column '{by}' not found in table",
+                session_id,
+                table_name,
+                mention=by,
+            )
         
         # Sample the data
         if by is None:
@@ -380,10 +398,12 @@ def head_rows(
     try:
         df = get_table_data(session_id, table_name)
         if df is None:
-            return {
-                "success": False,
-                "error": f"Table '{table_name}' not found in session {session_id}"
-            }
+            return format_error_with_context(
+                f"Table '{table_name}' not found in session {session_id}",
+                session_id,
+                table_name,
+                suggestions=["Call initialize_data_table or list_tables", "Check session_id"],
+            )
         if n <= 0:
             return {
                 "success": False,
@@ -421,10 +441,12 @@ def tail_rows(
     try:
         df = get_table_data(session_id, table_name)
         if df is None:
-            return {
-                "success": False,
-                "error": f"Table '{table_name}' not found in session {session_id}"
-            }
+            return format_error_with_context(
+                f"Table '{table_name}' not found in session {session_id}",
+                session_id,
+                table_name,
+                suggestions=["Call initialize_data_table or list_tables", "Check session_id"],
+            )
         if n <= 0:
             return {
                 "success": False,
@@ -464,10 +486,12 @@ def slice_rows(
     try:
         df = get_table_data(session_id, table_name)
         if df is None:
-            return {
-                "success": False,
-                "error": f"Table '{table_name}' not found in session {session_id}"
-            }
+            return format_error_with_context(
+                f"Table '{table_name}' not found in session {session_id}",
+                session_id,
+                table_name,
+                suggestions=["Call initialize_data_table or list_tables", "Check session_id"],
+            )
         if start is None:
             return {
                 "success": False,

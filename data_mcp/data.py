@@ -5,11 +5,11 @@ Contains MCP tools for data manipulation operations including cleaning, transfor
 aggregation, feature engineering, and multi-table operations.
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 import numpy as np
 import pandas as pd
 #from mcp.server.transport_security import TransportSecuritySettings
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 
 
 # # Determine environment - Render automatically sets RENDER=true
@@ -23,9 +23,10 @@ from fastmcp import FastMCP
 from .data_functions.core import (
     initialize_table,
     get_data_summary,
+    get_table_data,
     list_available_tables,
     undo_last_operation,
-    redo_operation as redo_last_operation
+    redo_operation as redo_last_operation,
 )
 from .data_functions.cleaning import (
     drop_rows,
@@ -69,6 +70,7 @@ from .data_functions.multi_table import (
     concat_tables,
     merge_on_index
 )
+from .data_functions.validation import validate_schema
 
 # # Configure transport security based on environment
 # if IS_PRODUCTION:
@@ -103,8 +105,20 @@ from .data_functions.multi_table import (
 mcp = FastMCP(
     name="Data Assistant MCP Server",
     instructions="""
-        This server provides data analysis tools.
-    """
+        Data manipulation MCP: cleaning, selection, transforms, aggregation, feature engineering, joins.
+
+        Read-only context (prefer these to reduce tool round-trips):
+        - session://{session_id}/summary
+        - session://{session_id}/tables/{table_name}/preview
+        - session://{session_id}/operations
+        - session://{session_id}/data-quality/{table_name}
+
+        Prompts expose guided workflows (cleaning, EDA, quality report, merge prep, modeling prep).
+
+        Large tables: use sample_table_rows or get_table_summary instead of loading full data.
+
+        Interactive tools (e.g. guided_data_cleaning) require MCP client elicitation support.
+    """,
 )
 
 
@@ -209,6 +223,28 @@ def list_tables(session_id: str) -> dict:
             "success": False,
             "error": f"Failed to list tables: {str(e)}"
         }
+
+
+@mcp.tool()
+def validate_table_schema(
+    session_id: str,
+    expected_schema: Dict[str, str],
+    table_name: str = "current",
+) -> dict:
+    """
+    Validate that the table contains expected columns and coarse dtypes
+    (string, int, float, bool, datetime). Returns missing columns and type mismatches.
+
+    Args:
+        session_id: Session identifier
+        expected_schema: Map of column name -> logical type (e.g. {"id": "int", "name": "string"})
+        table_name: Table to validate (default: current)
+    """
+    try:
+        result = validate_schema(session_id, expected_schema, table_name)
+        return _to_serializable(result)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @mcp.tool()
@@ -483,18 +519,20 @@ def clean_string_columns(
 
 
 @mcp.tool()
-def remove_outliers_from_table(
+async def remove_outliers_from_table(
+    ctx: Context,
     session_id: str,
     columns: List[str],
     method: str = "iqr",
     threshold: float = 1.5,
     table_name: str = "current",
     handle_method: str = "remove",
-    include_boxplot: bool = False
+    include_boxplot: bool = False,
 ) -> dict:
     """
     Remove outliers from numeric columns using IQR or z-score method.
-    
+    Reports progress when the MCP client sends a progress token (optional).
+
     Args:
         session_id: Unique session identifier
         columns: List of numeric column names
@@ -503,14 +541,18 @@ def remove_outliers_from_table(
         table_name: Name of the table (default: "current")
         handle_method: "remove" to drop rows, "cap" or "winsorize" to clamp values (default: "remove")
         include_boxplot: Include boxplot stats in response (default: False)
-    
+
     Returns:
         Dictionary with operation result and number of rows removed
-    
+
     Example:
         remove_outliers_from_table("session_123", ["Price", "Weight"], method="iqr", threshold=2.0)
     """
+    total = 3
     try:
+        await ctx.report_progress(progress=0, total=total)
+        await ctx.info("Outlier removal: loading and validating")
+        await ctx.report_progress(progress=1, total=total)
         result = remove_outliers(
             session_id,
             columns,
@@ -518,8 +560,9 @@ def remove_outliers_from_table(
             threshold,
             table_name,
             handle_method,
-            include_boxplot
+            include_boxplot,
         )
+        await ctx.report_progress(progress=total, total=total)
         return result
     except Exception as e:
         return {
@@ -551,6 +594,92 @@ def detect_missing_values(
             "success": False,
             "error": f"Failed to detect missing values: {str(e)}"
         }
+
+
+@mcp.tool()
+async def guided_data_cleaning(
+    ctx: Context,
+    session_id: str,
+    table_name: str = "current",
+) -> dict:
+    """
+    Walk through columns that have missing values and ask how to handle each via MCP elicitation.
+
+    Requires an MCP client that supports elicitation; unsupported clients will error.
+
+    Strategies: fill_mean, fill_median, fill_mode, forward_fill, fill_unknown, drop_rows, skip.
+    """
+    option_set = [
+        "fill_mean",
+        "fill_median",
+        "fill_mode",
+        "forward_fill",
+        "fill_unknown",
+        "drop_rows",
+        "skip",
+    ]
+    decisions: List[Dict[str, Any]] = []
+    results: List[Dict[str, Any]] = []
+    skipped_columns: Set[str] = set()
+
+    while True:
+        df = get_table_data(session_id, table_name)
+        if df is None:
+            return {"success": False, "error": f"Table '{table_name}' not found in session {session_id}"}
+        missing = df.isnull().sum()
+        miss_cols = missing[missing > 0]
+        pending = [c for c in miss_cols.index if c not in skipped_columns]
+        if not pending:
+            break
+
+        col = pending[0]
+        count_i = int(miss_cols[col])
+        pct = (count_i / len(df)) * 100 if len(df) else 0.0
+        dtype = str(df[col].dtype)
+        elicit_result = await ctx.elicit(
+            message=(
+                f"Column '{col}': {count_i} missing values ({pct:.1f}%). "
+                f"dtype={dtype}. How should we handle this?"
+            ),
+            response_type=option_set,
+        )
+        if elicit_result.action != "accept":
+            return {
+                "success": False,
+                "message": "Elicitation cancelled or declined",
+                "decisions": decisions,
+            }
+        strat = elicit_result.data
+        decisions.append({"column": col, "strategy": strat})
+        if strat == "skip":
+            skipped_columns.add(col)
+            continue
+
+        if strat == "fill_mean":
+            res = fill_missing(session_id, method="mean", columns=[col], table_name=table_name)
+        elif strat == "fill_median":
+            res = fill_missing(session_id, method="median", columns=[col], table_name=table_name)
+        elif strat == "fill_mode":
+            res = fill_missing(session_id, method="mode", columns=[col], table_name=table_name)
+        elif strat == "forward_fill":
+            res = fill_missing(session_id, method="ffill", columns=[col], table_name=table_name)
+        elif strat == "fill_unknown":
+            res = fill_missing(session_id, value="Unknown", columns=[col], table_name=table_name)
+        elif strat == "drop_rows":
+            res = drop_missing(session_id, how="any", subset=[col], table_name=table_name)
+        else:
+            results.append({"column": col, "error": f"unknown strategy {strat}"})
+            continue
+        results.append({"column": col, "strategy": strat, "result": res})
+        if not res.get("success"):
+            return {
+                "success": False,
+                "error": res.get("error"),
+                "decisions": decisions,
+                "partial_results": results,
+            }
+
+    return {"success": True, "decisions": decisions, "results": results, "session_id": session_id}
 
 
 # ============================================================================
@@ -1084,7 +1213,8 @@ def create_interaction_column(
 # ============================================================================
 
 @mcp.tool()
-def merge_data_tables(
+async def merge_data_tables(
+    ctx: Context,
     session_id: str,
     left_table: str,
     right_table: str,
@@ -1093,12 +1223,19 @@ def merge_data_tables(
     right_on: Optional[str] = None,
     on: Optional[str] = None,
     new_table_name: Optional[str] = None,
-    suffixes: tuple = ("_left", "_right")
+    suffixes: tuple = ("_left", "_right"),
 ) -> dict:
     """
     Merge two tables using database-style join operation.
+    Progress updates require a client progress token (otherwise no-op).
     """
+    total = 4
     try:
+        await ctx.report_progress(progress=0, total=total)
+        await ctx.info("Merge: load and validate keys")
+        await ctx.report_progress(progress=1, total=total)
+        await ctx.info("Merge: executing join")
+        await ctx.report_progress(progress=2, total=total)
         result = merge_tables(
             session_id,
             left_table,
@@ -1108,8 +1245,9 @@ def merge_data_tables(
             right_on,
             on,
             new_table_name,
-            suffixes
+            suffixes,
         )
+        await ctx.report_progress(progress=total, total=total)
         return result
     except Exception as e:
         return {
