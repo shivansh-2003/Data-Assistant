@@ -4,8 +4,9 @@ Stores DataFrames in Redis with automatic TTL expiration.
 """
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
-
+from data_mcp.data import mcp
 from dotenv import load_dotenv
 
 # Ensure .env is applied before any module reads UPSTASH_* (see also redis_db/constants.py)
@@ -42,7 +43,7 @@ logger = logging.getLogger(__name__)
 _default_handler = None
 _default_store = None
 mcp_available = False
-mcp_app = None
+mcp_http_app = None
 
 def get_default_handler():
     global _default_handler
@@ -76,16 +77,23 @@ class SupabaseIngestionRequest(BaseModel):
     project_name: Optional[str] = None
 
 # ============================================================================
-# FastAPI Application Initialization
+# MCP HTTP app (before FastAPI — parent must run MCP lifespan; see FastMCP ASGI docs)
 # ============================================================================
+if os.getenv("ENABLE_MCP", "true").lower() == "true":
+    try:
+        logger.info("Attempting to load MCP server...")
+        mcp_http_app = mcp.http_app(path="/mcp")
+        mcp_available = True
+        logger.info("✅ MCP server loaded successfully")
+    except Exception as e:
+        logger.exception("MCP server failed to load: %s", e)
+        mcp_http_app = None
+        mcp_available = False
 
-# CRITICAL: Create app FIRST to ensure it always exists (for Render deployment)
-app = FastAPI(title="Data Analyst Platform", version="1.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-
-@app.on_event("startup")
-async def _log_redis_on_startup() -> None:
+@asynccontextmanager
+async def _app_lifespan(app: FastAPI):
+    """Redis status logging + FastMCP Streamable HTTP session manager (task group)."""
     store = get_default_store()
     if store.is_connected():
         logger.info("Upstash Redis: connected — session tables will persist.")
@@ -95,9 +103,26 @@ async def _log_redis_on_startup() -> None:
             "UPSTASH_REDIS_REST_TOKEN in your project .env. "
             "Uploads may return 200 with redis_stored=false; GET /api/session/.../tables will 404."
         )
+    if mcp_http_app is not None:
+        async with mcp_http_app.lifespan(mcp_http_app):
+            yield
+    else:
+        yield
 
 
-# Add minimal health check IMMEDIATELY (before MCP loading)
+# ============================================================================
+# FastAPI Application Initialization
+# ============================================================================
+
+# CRITICAL: lifespan runs MCP session manager; mounting alone is not enough.
+app = FastAPI(
+    title="Data Analyst Platform",
+    version="1.1.0",
+    lifespan=_app_lifespan,
+)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+
 @app.get("/ping")
 async def ping():
     return {"status": "ok", "timestamp": time.time()}
@@ -107,16 +132,7 @@ async def health_check():
     redis_status = get_default_store().is_connected()
     return {"status": "healthy", "redis_connected": redis_status, "mcp_available": mcp_available}
 
-# Now try to load MCP (non-blocking, with error handling)
-mcp_http_app = None
-if os.getenv("ENABLE_MCP", "true").lower() == "true":
-    logger.info("Attempting to load MCP server...")
-    from data_mcp.data import mcp
-    mcp_http_app = mcp.http_app(path="/mcp")
-    mcp_available = True
-    logger.info("✅ MCP server loaded successfully")
-    
-    # Mount MCP server if loaded successfully
+if mcp_http_app is not None:
     app.mount("/data", mcp_http_app)
     logger.info("🔧 MCP server mounted at /data/mcp")
 
