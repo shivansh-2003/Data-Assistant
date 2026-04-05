@@ -1,13 +1,15 @@
 # Manual Testing Guide (MCP Inspector)
 
-This guide is for validating `data-mcp-2/server.py` manually using MCP Inspector (no automated tests).
+This guide is for validating the Data MCP over HTTP using MCP Inspector (no automated tests).
 
 ## Prerequisites
 
 - Python venv activated with project deps installed.
-- Server running locally: `python server.py` in `data-mcp-2/`.
+- Server running locally, either:
+  - **Unified app (recommended):** from repo root, `python main.py` — MCP is mounted at `/data`; the FastAPI app runs the MCP **lifespan** so Streamable HTTP works (see `main.py` `_app_lifespan`).
+  - **MCP-only:** from repo root with `PYTHONPATH=.` or package install, `uvicorn data_mcp.server:app` — `data_mcp/server.py` already sets `lifespan=mcp_app.lifespan`.
 - MCP Inspector running (`npx @modelcontextprotocol/inspector`).
-- MCP endpoint should be: `http://localhost:8000/data/mcp`.
+- MCP endpoint: `http://localhost:8000/data/mcp` (same for both; adjust host/port if needed).
 
 ## Connection Setup (MCP Inspector)
 
