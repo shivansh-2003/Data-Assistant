@@ -16,11 +16,12 @@ from langfuse import observe
 from observability.langfuse_client import build_langchain_callback, update_trace_context
 
 
-# Configuration
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "https://data-assistant-hj5f.onrender.com/data/mcp")
-INGESTION_API_URL = os.getenv("INGESTION_API_URL", "https://data-assistant-hj5f.onrender.com")
+# Configuration — use 127.0.0.1 (or FASTAPI_URL) for outbound HTTP; 0.0.0.0 is bind-only.
+_base = os.getenv("FASTAPI_URL", "http://127.0.0.1:8000").rstrip("/")
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", f"{_base}/data/mcp")
+INGESTION_API_URL = os.getenv("INGESTION_API_URL", _base)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.1")  # Using GPT-5.1 as requested
+OPENAI_MODEL = "gpt-5.1"  # Using GPT-5.1 as requested
 # Note: If GPT-5.1 is not available, fallback to latest model
 # You can also use: "gpt-4o", "gpt-4-turbo", etc.
 
@@ -229,7 +230,6 @@ async def analyze_data(session_id: str, query: str) -> str:
     
     # Create callbacks to track tool usage + Langfuse tracing
     tool_callback = ToolUsageCallback()
-    update_trace_context(session_id=session_id, metadata={"source": "mcp_client"})
     langfuse_callback = build_langchain_callback(
         session_id=session_id,
         metadata={"source": "mcp_client"},

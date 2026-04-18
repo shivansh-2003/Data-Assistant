@@ -45,6 +45,9 @@ google-genai
 # Upstash Redis (REST API)
 upstash-redis
 
+# Redis Cloud / standard Redis (KV)
+redis
+
 # Graph Visualization
 graphviz 
 

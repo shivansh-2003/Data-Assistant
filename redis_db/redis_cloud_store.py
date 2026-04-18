@@ -1,4 +1,6 @@
-"""Session storage via Upstash Redis REST SDK."""
+"""Session storage via redis-py (Redis Cloud / standard TCP or TLS)."""
+
+from __future__ import annotations
 
 import base64
 import json
@@ -13,8 +15,6 @@ from .constants import (
     KEY_SESSION_TABLES,
     KEY_VERSION_TABLES,
     SESSION_TTL,
-    UPSTASH_REDIS_REST_TOKEN,
-    UPSTASH_REDIS_REST_URL,
 )
 from .serializer import DataFrameSerializer
 from .session_store import BaseSessionStore
@@ -23,54 +23,94 @@ from .store_common import append_lineage, json_loads_flexible, version_ids_from_
 logger = logging.getLogger(__name__)
 
 
-class RedisStore(BaseSessionStore):
-    """Upstash REST: session tables, metadata, versions, lineage graph."""
-
+class RedisCloudStore(BaseSessionStore):
     def __init__(
         self,
         redis_url: Optional[str] = None,
-        redis_token: Optional[str] = None,
+        host: Optional[str] = None,
+        port: int = 6379,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        tls: Optional[bool] = None,
+        db: int = 0,
         session_ttl: Optional[int] = None,
         serializer: Optional[DataFrameSerializer] = None,
     ):
-        self.redis_url = redis_url or UPSTASH_REDIS_REST_URL
-        self.redis_token = redis_token or UPSTASH_REDIS_REST_TOKEN
         self.session_ttl = session_ttl or SESSION_TTL
         self.serializer = serializer or DataFrameSerializer()
-        self.redis = None
-        self._initialize_redis()
 
-    def _initialize_redis(self) -> None:
+        self._client = None
+        self._client_kwargs = {
+            "redis_url": redis_url,
+            "host": host,
+            "port": port,
+            "username": username,
+            "password": password,
+            "tls": tls,
+            "db": db,
+        }
+        self._initialize_client()
+
+    def _initialize_client(self) -> None:
         try:
-            from upstash_redis import Redis
+            import redis
 
-            url = (self.redis_url or "").strip().strip('"').strip("'")
-            token = (self.redis_token or "").strip().strip('"').strip("'")
-
-            if url and token:
-                self.redis = Redis(
-                    url=url,
-                    token=token,
-                    allow_telemetry=False,
-                    rest_retries=3,
-                    rest_retry_interval=2.0,
+            redis_url = (self._client_kwargs.get("redis_url") or "").strip()
+            if redis_url:
+                self._client = redis.Redis.from_url(
+                    redis_url,
+                    decode_responses=False,
+                    socket_connect_timeout=5,
+                    socket_timeout=10,
+                    health_check_interval=30,
+                    retry_on_timeout=True,
                 )
             else:
-                self.redis = Redis.from_env(
-                    allow_telemetry=False,
-                    rest_retries=3,
-                    rest_retry_interval=2.0,
+                host = (self._client_kwargs.get("host") or "").strip()
+                port = int(self._client_kwargs.get("port") or 6379)
+                username = self._client_kwargs.get("username")
+                password = self._client_kwargs.get("password")
+                tls_opt = self._client_kwargs.get("tls")
+                ssl_enabled = False if tls_opt is None else bool(tls_opt)
+                db = int(self._client_kwargs.get("db") or 0)
+
+                if not host:
+                    raise ValueError("Redis Cloud config missing: set REDIS_URL or REDIS_HOST")
+
+                self._client = redis.Redis(
+                    host=host,
+                    port=port,
+                    username=username,
+                    password=password,
+                    db=db,
+                    ssl=ssl_enabled,
+                    decode_responses=False,
+                    socket_connect_timeout=5,
+                    socket_timeout=10,
+                    health_check_interval=30,
+                    retry_on_timeout=True,
                 )
 
-            self.redis.ping()
-            logger.info("Connected to Upstash Redis")
-
+            self._client.ping()
+            logger.info("Connected to Redis (standard/Redis Cloud)")
         except ImportError:
-            logger.error("upstash-redis not installed. Run: pip install upstash-redis")
-            self.redis = None
+            logger.error("redis (redis-py) not installed. Add `redis` to requirements.txt")
+            self._client = None
         except Exception as e:
-            logger.error("Upstash Redis init error: %s", e, exc_info=True)
-            self.redis = None
+            logger.error("Redis Cloud init error: %s", e, exc_info=True)
+            self._client = None
+
+    @property
+    def redis(self):
+        return self._client
+
+    def is_connected(self) -> bool:
+        if self._client is None:
+            return False
+        try:
+            return bool(self._client.ping())
+        except Exception:
+            return False
 
     def probe_read_write(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {"ping": False, "set_get_delete": False, "error": None}
@@ -79,110 +119,72 @@ class RedisStore(BaseSessionStore):
             return out
         key = "__data_assistant_probe__"
         try:
-            self.redis.ping()
+            self._client.ping()
             out["ping"] = True
-            self.redis.set(key, "ok", ex=15)
-            val = self.redis.get(key)
-            self.redis.delete(key)
-            out["set_get_delete"] = val in ("ok", b"ok")
+            self._client.set(key, b"ok", ex=15)
+            val = self._client.get(key)
+            self._client.delete(key)
+            out["set_get_delete"] = val in (b"ok", "ok")
             if not out["set_get_delete"]:
                 out["sample_value_repr"] = repr(val)[:200]
         except Exception as e:
-            msg = str(e)
-            out["error"] = msg
-            if "NOPERM" in msg or "no permissions" in msg.lower():
-                out["hint"] = (
-                    "REST token is read-only or ACL-restricted (cannot SET). In Upstash: "
-                    "Redis → your database → REST API → use the default read-write token, "
-                    "not a read-only token. Update UPSTASH_REDIS_REST_TOKEN in .env and restart."
-                )
-            logger.error("Redis probe failed: %s", e, exc_info=True)
+            out["error"] = str(e)
+            logger.error("Redis Cloud probe failed: %s", e, exc_info=True)
         return out
 
-    def is_connected(self) -> bool:
-        if self.redis is None:
-            return False
-        try:
-            self.redis.ping()
-            return True
-        except Exception:
-            return False
-
-    def scan_keys(self, pattern: str) -> List[str]:
-        if self.redis is None:
+    def _scan_keys(self, pattern: str, count: int = 200) -> List[str]:
+        if self._client is None:
             return []
         out: List[str] = []
         cursor = 0
         while True:
-            cursor, batch = self.redis.scan(cursor, match=pattern, count=100)
-            out.extend(batch)
+            cursor, batch = self._client.scan(cursor=cursor, match=pattern, count=count)
+            for k in batch:
+                out.append(k.decode("utf-8") if isinstance(k, (bytes, bytearray)) else str(k))
             if cursor == 0:
                 break
         return out
 
-    def count_keys(self, pattern: str) -> int:
-        if self.redis is None:
-            return 0
-        n = 0
-        cursor = 0
-        while True:
-            cursor, batch = self.redis.scan(cursor, match=pattern, count=100)
-            n += len(batch)
-            if cursor == 0:
-                break
-        return n
+    def _set_with_ttl(self, key: str, value: bytes, ttl_seconds: int) -> None:
+        self._client.set(key, value, ex=ttl_seconds)
 
     def _sync_version_ttls(self, session_id: str) -> None:
         try:
             for version_id in self.list_versions(session_id):
                 key_version = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
-                self.redis.expire(key_version, self.session_ttl)
+                self._client.expire(key_version, self.session_ttl)
         except Exception as e:
             logger.warning("Failed to sync version TTLs for %s: %s", session_id, e)
 
     def _write_metadata(self, session_id: str, metadata: Dict) -> bool:
         key = KEY_SESSION_META.format(sid=session_id)
-        self.redis.setex(key, self.session_ttl, json.dumps(metadata, default=str))
+        self._set_with_ttl(key, json.dumps(metadata, default=str).encode("utf-8"), self.session_ttl)
         return True
 
-    def save_session(
-        self,
-        session_id: str,
-        tables: Dict[str, pd.DataFrame],
-        metadata: Dict,
-    ) -> bool:
+    def save_session(self, session_id: str, tables: Dict[str, pd.DataFrame], metadata: Dict) -> bool:
         if not self.is_connected():
-            logger.error("Upstash Redis not connected")
+            logger.error("Redis Cloud not connected")
             return False
-
         try:
             key_tables = KEY_SESSION_TABLES.format(sid=session_id)
             key_meta = KEY_SESSION_META.format(sid=session_id)
             key_graph = KEY_SESSION_GRAPH.format(sid=session_id)
 
             tables_bytes = self.serializer.serialize(tables)
-            tables_b64 = base64.b64encode(tables_bytes).decode("utf-8")
+            tables_b64 = base64.b64encode(tables_bytes)
 
-            self.redis.setex(key_tables, self.session_ttl, tables_b64)
-            self.redis.setex(key_meta, self.session_ttl, json.dumps(metadata, default=str))
-            if not self.redis.exists(key_graph):
-                self.redis.setex(key_graph, self.session_ttl, json.dumps({"nodes": [], "edges": []}))
+            self._set_with_ttl(key_tables, tables_b64, self.session_ttl)
+            self._set_with_ttl(key_meta, json.dumps(metadata, default=str).encode("utf-8"), self.session_ttl)
+
+            if not self._client.exists(key_graph):
+                empty = json.dumps({"nodes": [], "edges": []}).encode("utf-8")
+                self._set_with_ttl(key_graph, empty, self.session_ttl)
             else:
-                self.redis.expire(key_graph, self.session_ttl)
+                self._client.expire(key_graph, self.session_ttl)
 
-            try:
-                self._sync_version_ttls(session_id)
-            except Exception as sync_e:
-                logger.warning("TTL sync for version keys skipped (session saved): %s", sync_e)
-
-            logger.info(
-                "Saved session %s with %d tables (TTL: %ss)",
-                session_id,
-                len(tables),
-                self.session_ttl,
-            )
+            self._sync_version_ttls(session_id)
+            logger.info("Saved session %s with %d tables (TTL=%ss)", session_id, len(tables), self.session_ttl)
             return True
-
         except Exception as e:
             logger.error("Failed to save session %s: %s", session_id, e, exc_info=True)
             return False
@@ -190,17 +192,13 @@ class RedisStore(BaseSessionStore):
     def load_session(self, session_id: str) -> Optional[Dict[str, pd.DataFrame]]:
         if not self.is_connected():
             return None
-
         try:
             key = KEY_SESSION_TABLES.format(sid=session_id)
-            data = self.redis.get(key)
-
+            data = self._client.get(key)
             if data is None:
                 return None
-
             tables_bytes = base64.b64decode(data)
             return self.serializer.deserialize(tables_bytes)
-
         except Exception as e:
             logger.error("Failed to load session %s: %s", session_id, e)
             return None
@@ -208,16 +206,12 @@ class RedisStore(BaseSessionStore):
     def get_metadata(self, session_id: str) -> Optional[Dict]:
         if not self.is_connected():
             return None
-
         try:
             key = KEY_SESSION_META.format(sid=session_id)
-            data = self.redis.get(key)
-
+            data = self._client.get(key)
             if data is None:
                 return None
-
-            return json.loads(data)
-
+            return json_loads_flexible(data)
         except Exception as e:
             logger.error("Failed to get metadata for %s: %s", session_id, e)
             return None
@@ -225,126 +219,85 @@ class RedisStore(BaseSessionStore):
     def delete_session(self, session_id: str) -> bool:
         if not self.is_connected():
             return False
-
         try:
-            all_keys = self.scan_keys(f"session:{session_id}:*")
-            if not all_keys:
-                logger.warning("No keys found for session %s", session_id)
+            keys = self._scan_keys(f"session:{session_id}:*")
+            if not keys:
                 return False
-
-            deleted = self.redis.delete(*all_keys)
-
-            logger.info(
-                "Deleted session %s - removed %d keys: %d found",
-                session_id,
-                deleted,
-                len(all_keys),
-            )
-            return deleted > 0
-
+            return bool(self._client.delete(*keys))
         except Exception as e:
             logger.error("Failed to delete session %s: %s", session_id, e)
-            return False
-
-    def session_exists(self, session_id: str) -> bool:
-        if not self.is_connected():
-            return False
-
-        try:
-            key = KEY_SESSION_TABLES.format(sid=session_id)
-            return bool(self.redis.exists(key))
-        except Exception as e:
-            logger.error("Failed to check session %s: %s", session_id, e)
             return False
 
     def extend_ttl(self, session_id: str) -> bool:
         if not self.is_connected():
             return False
-
         try:
             key_tables = KEY_SESSION_TABLES.format(sid=session_id)
             key_meta = KEY_SESSION_META.format(sid=session_id)
             key_graph = KEY_SESSION_GRAPH.format(sid=session_id)
-
-            self.redis.expire(key_tables, self.session_ttl)
-            self.redis.expire(key_meta, self.session_ttl)
-            self.redis.expire(key_graph, self.session_ttl)
+            self._client.expire(key_tables, self.session_ttl)
+            self._client.expire(key_meta, self.session_ttl)
+            self._client.expire(key_graph, self.session_ttl)
             self._sync_version_ttls(session_id)
-
             return True
-
         except Exception as e:
             logger.error("Failed to extend TTL for %s: %s", session_id, e)
+            return False
+
+    def session_exists(self, session_id: str) -> bool:
+        if not self.is_connected():
+            return False
+        try:
+            key_tables = KEY_SESSION_TABLES.format(sid=session_id)
+            return bool(self._client.exists(key_tables))
+        except Exception:
             return False
 
     def list_sessions(self) -> List[Dict]:
         if not self.is_connected():
             return []
-
+        sessions: List[Dict] = []
         try:
-            sessions = []
-            pattern = KEY_SESSION_TABLES.replace("{sid}", "*")
-            for key in self.scan_keys(pattern):
+            for key in self._scan_keys("session:*:meta"):
                 try:
-                    session_id = key.split(":")[1]
-                    metadata = self.get_metadata(session_id)
-                    if metadata:
-                        sessions.append({"session_id": session_id, "metadata": metadata})
+                    parts = key.split(":")
+                    sid = parts[1] if len(parts) >= 3 else None
+                    if not sid:
+                        continue
+                    meta = self.get_metadata(sid) or {}
+                    sessions.append({"session_id": sid, "metadata": meta})
                 except Exception:
                     continue
-            return sessions
-
         except Exception as e:
             logger.error("Failed to list sessions: %s", e)
-            return []
+        return sessions
 
-    def save_version(
-        self,
-        session_id: str,
-        version_id: str,
-        tables: Dict[str, pd.DataFrame],
-    ) -> bool:
+    def save_version(self, session_id: str, version_id: str, tables: Dict[str, pd.DataFrame]) -> bool:
         if not self.is_connected():
-            logger.error("Upstash Redis not connected")
             return False
-
         try:
             key = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
-
             tables_bytes = self.serializer.serialize(tables)
-            tables_b64 = base64.b64encode(tables_bytes).decode("utf-8")
-
-            self.redis.setex(key, self.session_ttl, tables_b64)
+            tables_b64 = base64.b64encode(tables_bytes)
+            self._set_with_ttl(key, tables_b64, self.session_ttl)
             self.extend_ttl(session_id)
-
-            logger.info("Saved version %s for session %s", version_id, session_id)
             return True
-
         except Exception as e:
             logger.error("Failed to save version %s for %s: %s", version_id, session_id, e)
             return False
 
-    def load_version(
-        self,
-        session_id: str,
-        version_id: str,
-    ) -> Optional[Dict[str, pd.DataFrame]]:
+    def load_version(self, session_id: str, version_id: str) -> Optional[Dict[str, pd.DataFrame]]:
         if not self.is_connected():
             return None
-
         try:
             key = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
-            data = self.redis.get(key)
-
+            data = self._client.get(key)
             if data is None:
                 return None
-
             tables_bytes = base64.b64decode(data)
             tables = self.serializer.deserialize(tables_bytes)
             self.extend_ttl(session_id)
-
             return tables
-
         except Exception as e:
             logger.error("Failed to load version %s for %s: %s", version_id, session_id, e)
             return None
@@ -352,13 +305,9 @@ class RedisStore(BaseSessionStore):
     def delete_version(self, session_id: str, version_id: str) -> bool:
         if not self.is_connected():
             return False
-
         try:
             key = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
-            deleted = self.redis.delete(key)
-            logger.info("Deleted version %s for session %s", version_id, session_id)
-            return deleted > 0
-
+            return bool(self._client.delete(key))
         except Exception as e:
             logger.error("Failed to delete version %s for %s: %s", version_id, session_id, e)
             return False
@@ -366,11 +315,9 @@ class RedisStore(BaseSessionStore):
     def list_versions(self, session_id: str) -> List[str]:
         if not self.is_connected():
             return []
-
         try:
             pattern = KEY_VERSION_TABLES.format(sid=session_id, vid="*")
-            return version_ids_from_key_names(self.scan_keys(pattern))
-
+            return version_ids_from_key_names(self._scan_keys(pattern))
         except Exception as e:
             logger.error("Failed to list versions for %s: %s", session_id, e)
             return []
@@ -378,16 +325,12 @@ class RedisStore(BaseSessionStore):
     def get_graph(self, session_id: str) -> Dict[str, Any]:
         if not self.is_connected():
             return {"nodes": [], "edges": []}
-
         try:
             key = KEY_SESSION_GRAPH.format(sid=session_id)
-            data = self.redis.get(key)
-
+            data = self._client.get(key)
             if data is None:
                 return {"nodes": [], "edges": []}
-
             return json_loads_flexible(data)
-
         except Exception as e:
             logger.error("Failed to get graph for %s: %s", session_id, e)
             return {"nodes": [], "edges": []}
@@ -402,18 +345,28 @@ class RedisStore(BaseSessionStore):
     ) -> bool:
         if not self.is_connected():
             return False
-
         try:
             graph = self.get_graph(session_id)
             append_lineage(graph, parent_vid, new_vid, operation, query)
-
             key = KEY_SESSION_GRAPH.format(sid=session_id)
-            self.redis.setex(key, self.session_ttl, json.dumps(graph, default=str))
+            self._set_with_ttl(key, json.dumps(graph, default=str).encode("utf-8"), self.session_ttl)
             self.extend_ttl(session_id)
-
-            logger.info("Updated graph for %s: added %s", session_id, new_vid)
             return True
-
         except Exception as e:
             logger.error("Failed to update graph for %s: %s", session_id, e)
             return False
+
+    def scan_keys(self, pattern: str) -> List[str]:
+        return self._scan_keys(pattern)
+
+    def count_keys(self, pattern: str) -> int:
+        if self._client is None:
+            return 0
+        n = 0
+        cursor = 0
+        while True:
+            cursor, batch = self._client.scan(cursor=cursor, match=pattern, count=500)
+            n += len(batch)
+            if cursor == 0:
+                break
+        return n

@@ -3,12 +3,12 @@
 from typing import Dict, List, Optional
 
 from .constants import SESSION_TTL
-from .redis_store import RedisStore
+from .session_store import get_session_store
 
 
 def get_session_diagnostics(session_id: Optional[str] = None) -> Dict:
     """Summarize connectivity, key counts, and optionally one session's keys/TTL."""
-    store = RedisStore()
+    store = get_session_store()
 
     if not store.is_connected():
         return {"error": "Failed to connect to Redis"}
@@ -24,7 +24,8 @@ def get_session_diagnostics(session_id: Optional[str] = None) -> Dict:
     try:
         if session_id:
             pattern = f"session:{session_id}:*"
-            session_keys = store.scan_keys(pattern)
+            # Both backends expose scan_keys/count_keys helpers.
+            session_keys = store.scan_keys(pattern)  # type: ignore[attr-defined]
             key_info: List[Dict] = []
             for key in session_keys:
                 try:
@@ -47,7 +48,7 @@ def get_session_diagnostics(session_id: Optional[str] = None) -> Dict:
             diagnostics["exists"] = store.session_exists(session_id)
             diagnostics["versions"] = store.list_versions(session_id)
         else:
-            diagnostics["sessions"] = store.list_sessions()
+            diagnostics["sessions"] = store.list_sessions()  # type: ignore[attr-defined]
             patterns = {
                 "all": "session:*",
                 "tables": "session:*:tables",
@@ -56,7 +57,7 @@ def get_session_diagnostics(session_id: Optional[str] = None) -> Dict:
                 "versions": "session:*:version:*:tables",
             }
             for key_type, pattern in patterns.items():
-                diagnostics[f"{key_type}_keys"] = store.count_keys(pattern)
+                diagnostics[f"{key_type}_keys"] = store.count_keys(pattern)  # type: ignore[attr-defined]
 
         return diagnostics
 

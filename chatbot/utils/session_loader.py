@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Any
 import pandas as pd
 import requests
 
-from redis_db import RedisStore
+from redis_db import BaseSessionStore, get_session_store
 
 logger = logging.getLogger(__name__)
 
@@ -18,14 +18,14 @@ SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 class SessionLoader:
     """Loader for session data from Redis storage."""
     
-    def __init__(self, redis_store: Optional[RedisStore] = None):
+    def __init__(self, redis_store: Optional[BaseSessionStore] = None):
         """
         Initialize SessionLoader.
         
         Args:
             redis_store: Optional RedisStore instance (creates default if None)
         """
-        self.store = redis_store or RedisStore()
+        self.store = redis_store or get_session_store()
         self.logger = logging.getLogger(__name__)
     
     def load_session_dataframes(self, session_id: str) -> Dict[str, pd.DataFrame]:

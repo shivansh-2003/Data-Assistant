@@ -52,14 +52,18 @@ def get_secret(key_path, fallback_env=None, default=None):
 
 # FastAPI endpoint configuration (use 127.0.0.1 for client requests — 0.0.0.0 is invalid as a destination)
 # Must match the port where uvicorn runs (see main.py PORT, default 8000).
-FASTAPI_URL = os.getenv("FASTAPI_URL", "https://data-assistant-hj5f.onrender.com")
+# FASTAPI_URL = os.getenv("FASTAPI_URL", "https://data-assistant-hj5f.onrender.com")
+FASTAPI_URL = os.getenv("FASTAPI_URL", "http://127.0.0.1:8000").rstrip("/")
+HTTP_TIMEOUT = int(os.getenv("HTTP_CLIENT_TIMEOUT", "30"))
+HTTP_TIMEOUT_LONG = int(os.getenv("HTTP_CLIENT_TIMEOUT_LONG", "120"))
 UPLOAD_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/file-upload"
 HEALTH_ENDPOINT = f"{FASTAPI_URL}/health"
 CONFIG_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/config"
 SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 # MCP Configuration
-MCP_SERVER_URL = "https://data-assistant-hj5f.onrender.com/data/mcp"
+# MCP_SERVER_URL = "https://data-assistant-hj5f.onrender.com/data/mcp"
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", f"{FASTAPI_URL}/data/mcp")
 OPENAI_API_KEY = get_secret("openai.api_key", "OPENAI_API_KEY")
 OPENAI_MODEL = get_secret("openai.model", "OPENAI_MODEL", "gpt-4o")
 
@@ -625,7 +629,7 @@ def get_session_tables_for_display(session_id: str) -> Optional[Dict]:
         response = requests.get(
             f"{SESSION_ENDPOINT}/{session_id}/tables",
             params={"format": "summary"},
-            timeout=10
+            timeout=HTTP_TIMEOUT,
         )
         response.raise_for_status()
         return response.json()
@@ -643,7 +647,7 @@ def get_session_metadata_for_display(session_id: str) -> Optional[Dict]:
     try:
         response = requests.get(
             f"{SESSION_ENDPOINT}/{session_id}/metadata",
-            timeout=10
+            timeout=HTTP_TIMEOUT,
         )
         response.raise_for_status()
         data = response.json()
@@ -659,7 +663,7 @@ def get_full_table_dataframe(session_id: str, table_name: str) -> Optional[pd.Da
         response = requests.get(
             f"{SESSION_ENDPOINT}/{session_id}/tables",
             params={"format": "full"},
-            timeout=30
+            timeout=HTTP_TIMEOUT,
         )
         response.raise_for_status()
         data = response.json()
@@ -1304,7 +1308,7 @@ def render_manipulation_tab():
                                 r = requests.post(
                                     f"{FASTAPI_URL}/api/session/{session_id}/branch",
                                     json={"version_id": vid},
-                                    timeout=10,
+                                    timeout=HTTP_TIMEOUT_LONG,
                                 )
                                 if r.status_code == 200:
                                     st.success(f"Branched to {vid}")
@@ -1368,7 +1372,7 @@ def render_manipulation_tab():
                             branch_response = requests.post(
                                 f"{FASTAPI_URL}/api/session/{session_id}/branch",
                                 json={"version_id": selected_version},
-                                timeout=10
+                                timeout=HTTP_TIMEOUT_LONG,
                             )
                             if branch_response.status_code == 200:
                                 st.success(f"✅ Branched to {selected_version}. New operations will start from here.")
@@ -1405,7 +1409,7 @@ def render_manipulation_tab():
                             prune_response = requests.post(
                                 f"{FASTAPI_URL}/api/session/{session_id}/prune_versions",
                                 json={"keep_last_n": int(keep_n)},
-                                timeout=10
+                                timeout=HTTP_TIMEOUT_LONG,
                             )
                             if prune_response.status_code == 200:
                                 st.success(f"✅ Pruned versions. Kept last {keep_n}.")
@@ -1563,7 +1567,7 @@ def render_manipulation_tab():
                                 "operation": operation_desc,
                                 "query": query
                             },
-                            timeout=10
+                            timeout=HTTP_TIMEOUT_LONG,
                         )
                         
                         if save_version_response.status_code == 200:

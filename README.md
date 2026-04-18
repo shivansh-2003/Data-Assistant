@@ -615,9 +615,9 @@ mcp_server_url = "https://data-analyst-mcp-server.onrender.com/data/mcp"
 # mcp_server_url = "http://127.0.0.1:8000/data/mcp"
 
 # Optional: Redis Configuration (if running backend locally)
+# Set either [redis].url OR map host/password into env vars the backend reads (see .env example).
 [redis]
-rest_url = "https://your-redis-url.upstash.io"
-rest_token = "your-redis-token-here"
+url = "rediss://<username>:<password>@<host>:<port>/0"
 session_ttl_minutes = 30
 ```
 
@@ -626,10 +626,19 @@ session_ttl_minutes = 30
 Alternatively, create a `.env` file in the project root:
 
 ```bash
-# Upstash Redis Configuration
-UPSTASH_REDIS_REST_URL=https://your-redis-url.upstash.io
-UPSTASH_REDIS_REST_TOKEN=your-redis-token
 SESSION_TTL_MINUTES=30
+
+# Standard Redis (Redis Cloud / Redis Labs): set URL *or* host + password
+REDIS_URL=rediss://<username>:<password>@<host>:<port>/0
+# Or minimal:
+# REDIS_HOST=<host>
+# REDIS_PORT=<port>
+# REDIS_PASSWORD=<secret>
+# Optional: REDIS_USERNAME=default   REDIS_TLS=true
+
+# Upstash REST (legacy): omit REDIS_URL / REDIS_HOST+PASSWORD, then set:
+# UPSTASH_REDIS_REST_URL=https://your-redis-url.upstash.io
+# UPSTASH_REDIS_REST_TOKEN=your-redis-token
 
 # OpenAI Configuration
 OPENAI_API_KEY=your-openai-api-key
@@ -712,8 +721,7 @@ Based on [Streamlit's official secrets management](https://docs.streamlit.io/dev
 | `[openai]` | `model` | OpenAI model to use | gpt-4o | No |
 | `[api]` | `fastapi_url` | FastAPI backend URL | https://data-assistant-hj5f.onrender.com | No |
 | `[api]` | `mcp_server_url` | MCP server endpoint | https://data-analyst-mcp-server.onrender.com/data/mcp | No |
-| `[redis]` | `rest_url` | Upstash Redis REST API URL | - | Yes* |
-| `[redis]` | `rest_token` | Upstash Redis REST API Token | - | Yes* |
+| `[redis]` | `url` | Standard Redis URL (`rediss://...` or `redis://...`) | - | Yes* |
 | `[redis]` | `session_ttl_minutes` | Session expiration time (minutes) | 30 | No |
 
 *Required only if running backend services locally
@@ -722,8 +730,14 @@ Based on [Streamlit's official secrets management](https://docs.streamlit.io/dev
 
 | Variable | Description | Production Default | Local Default | Required |
 |----------|-------------|-------------------|---------------|----------|
-| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST API URL | - | None | Yes* |
-| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST API Token | - | None | Yes* |
+| `REDIS_URL` | Standard Redis URL; if set, uses `redis-py` | - | None | Yes* |
+| `REDIS_HOST` | Redis host (with `REDIS_PASSWORD`) | - | None | Yes* |
+| `REDIS_PORT` | Redis port | 6379 | 6379 | No |
+| `REDIS_USERNAME` | ACL username (optional; defaults to `default` for host mode) | - | None | No |
+| `REDIS_PASSWORD` | Redis password | - | None | Yes* |
+| `REDIS_TLS` | TLS for host/port mode (`true`/`false`); omit = plain TCP | - | false | No |
+| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST API URL (legacy) | - | None | Yes* |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST API Token (legacy) | - | None | Yes* |
 | `SESSION_TTL_MINUTES` | Session expiration time (minutes) | 30 | 30 | No |
 | `OPENAI_API_KEY` | OpenAI API key for LLM | - | None | Yes |
 | `OPENAI_MODEL` | OpenAI model to use | gpt-4o | gpt-4o | No |
@@ -886,7 +900,7 @@ Data-Assistant/
 
 ### 1. Redis Database Module (`redis_db/`)
 
-**Purpose**: Manages session storage and data persistence using Upstash Redis.
+**Purpose**: Manages session storage and data persistence using Redis (standard `redis-py` when `REDIS_URL` or `REDIS_HOST`+`REDIS_PASSWORD` is set; otherwise Upstash REST).
 
 **Key Functions**:
 - `save_session()`: Store DataFrames and metadata with TTL

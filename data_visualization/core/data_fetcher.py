@@ -12,7 +12,8 @@ import pandas as pd
 import streamlit as st
 from typing import Optional, Dict, Any
 
-FASTAPI_URL = os.getenv("FASTAPI_URL", "https://data-assistant-hj5f.onrender.com")
+# FASTAPI_URL = os.getenv("FASTAPI_URL", "https://data-assistant-hj5f.onrender.com")
+FASTAPI_URL = os.getenv("FASTAPI_URL", "http://0.0.0.0:8000")
 SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 
 # Cache keys

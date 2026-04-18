@@ -12,3 +12,7 @@ data-mcp/
 # Visualization test outputs
 viz_test_output/
 context/
+
+/graphify-out/
+/graphify-out/obsidian/
+.claude/
