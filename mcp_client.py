@@ -5,13 +5,29 @@ Connects to the Data Assistant MCP Server and uses OpenAI GPT-5.1 for data manip
 
 import os
 import asyncio
+import threading
+import time as _time
+import logging as _logging
 import httpx
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langchain_core.callbacks import BaseCallbackHandler
 from langfuse import observe
+from perf_logger import BENCHMARKS as _BENCHMARKS
+
+_perf_log = _logging.getLogger("perf")
+
+
+def _perf_warn(name: str, elapsed: float, sid: str = "") -> None:
+    """Emit SLOW warning if elapsed exceeds benchmark threshold."""
+    threshold = _BENCHMARKS.get(name)
+    if threshold and elapsed > threshold:
+        _perf_log.warning(
+            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1f× over)",
+            name, sid, elapsed, threshold, elapsed / threshold,
+        )
 
 from observability.langfuse_client import build_langchain_callback, update_trace_context
 
@@ -33,14 +49,48 @@ using the available tools. Always:
 3. Provide clear explanations of what operations were performed
 4. Show summaries of the results when available"""
 
+_agent_lock = threading.Lock()
+_cached_agent: Optional[Any] = None
+_cached_mcp_client: Optional[Any] = None
+_cached_agent_config_key: Optional[str] = None
+
+
+def _mcp_agent_cache_key() -> str:
+    return f"{MCP_SERVER_URL}|{OPENAI_MODEL}"
+
+
+async def _get_or_create_agent() -> Tuple[Any, Any]:
+    """Reuse MCP client + LangChain agent across queries (same URL/model)."""
+    global _cached_agent, _cached_mcp_client, _cached_agent_config_key
+    key = _mcp_agent_cache_key()
+    if _cached_agent is not None and _cached_agent_config_key == key:
+        return _cached_agent, _cached_mcp_client
+    with _agent_lock:
+        if _cached_agent is not None and _cached_agent_config_key == key:
+            return _cached_agent, _cached_mcp_client
+        old_client = _cached_mcp_client
+        agent, client = await create_mcp_agent()
+        _cached_agent, _cached_mcp_client, _cached_agent_config_key = agent, client, key
+    if old_client is not None and old_client is not client:
+        await _cleanup_client(old_client)
+    return _cached_agent, _cached_mcp_client
+
+
+def reset_cached_mcp_agent() -> None:
+    """Clear cached agent (e.g. after MCP server URL change). Best-effort close is async-only."""
+    global _cached_agent, _cached_mcp_client, _cached_agent_config_key
+    with _agent_lock:
+        _cached_agent = None
+        _cached_mcp_client = None
+        _cached_agent_config_key = None
+
 
 async def _cleanup_client(client):
     """Clean up MCP client connections."""
     try:
-        if hasattr(client, 'close'):
+        if hasattr(client, "close"):
             await client.close()
     except (AttributeError, Exception):
-        # Client doesn't have close method or cleanup failed, skip silently
         pass
 
 
@@ -94,7 +144,8 @@ class ToolUsageCallback(BaseCallbackHandler):
 async def create_mcp_agent():
     """
     Create a LangChain agent connected to the MCP server with OpenAI GPT-5.1.
-    
+    Benchmark: < 2.0 s total (MCP connect + tool discovery + LLM init).
+
     Returns:
         Agent instance ready to use
     """
@@ -103,8 +154,12 @@ async def create_mcp_agent():
             "OPENAI_API_KEY environment variable is required. "
             "Set it with: export OPENAI_API_KEY='your-key-here'"
         )
-    
-    # Create MCP client connected to the Data Assistant MCP Server
+
+    _t_agent_start = _time.perf_counter()
+    _perf_log.info("[PERF] mcp.agent_create START  model=%s", OPENAI_MODEL)
+
+    # ── MCP client init ──────────────────────────────────────────────────────
+    _t_mcp = _time.perf_counter()
     client = MultiServerMCPClient(
         {
             "data_assistant": {
@@ -113,10 +168,19 @@ async def create_mcp_agent():
             }
         }
     )
-    
-    # Get tools from the MCP server
+
+    # ── Tool discovery ───────────────────────────────────────────────────────
+    _t_tools = _time.perf_counter()
+    _perf_log.info("[PERF] mcp.tool_fetch START  server=%s", MCP_SERVER_URL)
     print("Loading tools from MCP server...")
     tools = await client.get_tools()
+    _t_tools_elapsed = _time.perf_counter() - _t_tools
+    _perf_log.info(
+        "[PERF] mcp.tool_fetch END  tool_count=%d  duration=%.3fs",
+        len(tools), _t_tools_elapsed,
+    )
+    _perf_warn("mcp.tool_fetch", _t_tools_elapsed)
+
     print(f"\n✅ Loaded {len(tools)} tools from MCP server:")
     print("-" * 60)
     for idx, tool in enumerate(tools, 1):
@@ -124,25 +188,33 @@ async def create_mcp_agent():
         tool_desc = getattr(tool, 'description', 'No description')
         print(f"  {idx}. {tool_name}")
         if tool_desc:
-            # Truncate long descriptions
             desc = tool_desc[:80] + "..." if len(tool_desc) > 80 else tool_desc
             print(f"     └─ {desc}")
     print("-" * 60)
     print()
-    
-    # Create OpenAI LLM with GPT-5.1
+
+    # ── LLM init ─────────────────────────────────────────────────────────────
+    _t_llm_init = _time.perf_counter()
     llm = ChatOpenAI(
         model=OPENAI_MODEL,
         api_key=OPENAI_API_KEY,
-        temperature=0.1,  # Lower temperature for more deterministic data operations
+        temperature=0.1,
     )
-    
-    # Create agent with the tools
-    agent = create_agent(
-        llm,
-        tools
+    _perf_log.info(
+        "[PERF] mcp.llm_init  model=%s  duration=%.3fs",
+        OPENAI_MODEL, _time.perf_counter() - _t_llm_init,
     )
-    
+
+    # ── Agent assembly ────────────────────────────────────────────────────────
+    agent = create_agent(llm, tools)
+
+    _t_agent_elapsed = _time.perf_counter() - _t_agent_start
+    _perf_log.info(
+        "[PERF] mcp.agent_create END  tool_fetch=%.3fs  total=%.3fs",
+        _t_tools_elapsed, _t_agent_elapsed,
+    )
+    _perf_warn("mcp.agent_create", _t_agent_elapsed)
+
     return agent, client
 
 
@@ -216,7 +288,7 @@ async def analyze_data(session_id: str, query: str) -> str:
     Returns:
         Response from the agent
     """
-    agent, client = await create_mcp_agent()
+    agent, _client = await _get_or_create_agent()
     
     # Construct the message with session context
     message = f"""
@@ -238,25 +310,33 @@ async def analyze_data(session_id: str, query: str) -> str:
     callbacks = [tool_callback]
     if langfuse_callback:
         callbacks.append(langfuse_callback)
-    
-    try:
-        print("\n🚀 Starting analysis...")
-        response = await agent.ainvoke(
-            {
-                "messages": [
-                    {"role": "system", "content": AGENT_SYSTEM_MESSAGE},
-                    {"role": "user", "content": message}
-                ]
-            },
-            config={"callbacks": callbacks}
-        )
-        
-        # Show tool usage summary
-        print(tool_callback.get_tool_summary())
-        
-        return response["messages"][-1].content
-    finally:
-        await _cleanup_client(client)
+
+    # ── PERF: LLM agent invoke (the long pole in the tent) ───────────────────
+    _t_invoke_start = _time.perf_counter()
+    _perf_log.info(
+        "[PERF] mcp.llm_invoke START  session=%s  model=%s  query_len=%d",
+        session_id, OPENAI_MODEL, len(query),
+    )
+    print("\nStarting analysis...")
+    response = await agent.ainvoke(
+        {
+            "messages": [
+                {"role": "system", "content": AGENT_SYSTEM_MESSAGE},
+                {"role": "user", "content": message},
+            ]
+        },
+        config={"callbacks": callbacks},
+    )
+    _t_invoke = _time.perf_counter() - _t_invoke_start
+    _perf_log.info(
+        "[PERF] mcp.llm_invoke END  session=%s  duration=%.3fs  tool_calls=%d",
+        session_id, _t_invoke, len(tool_callback.tool_calls),
+    )
+    _perf_warn("mcp.llm_invoke", _t_invoke, session_id)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    print(tool_callback.get_tool_summary())
+    return response["messages"][-1].content
 
 
 async def interactive_chat():
@@ -271,7 +351,7 @@ async def interactive_chat():
     print("=" * 60)
     print()
     
-    agent, client = await create_mcp_agent()
+    agent, _client = await _get_or_create_agent()
     
     # Get available sessions and show them to user
     print("Fetching available sessions...")
@@ -305,62 +385,58 @@ async def interactive_chat():
     print(f"\nSession ID: {session_id}")
     print("Type 'exit' or 'quit' to end the session\n")
     
-    try:
-        while True:
-            query = input("You: ").strip()
+    while True:
+        query = input("You: ").strip()
+        
+        if query.lower() in ["exit", "quit", "q"]:
+            print("Goodbye!")
+            break
+        
+        if not query:
+            continue
+        
+        # Initialize table first if needed
+        init_message = f"""
+        Session ID: {session_id}
+        
+        User Query: {query}
+        
+        Please help me with this data analysis task. First, initialize the table from the session 
+        using initialize_data_table, then perform the requested operations.
+        """
+        
+        print("\n🤔 Thinking...")
+        try:
+            # Create callbacks to track tool usage + Langfuse tracing
+            tool_callback = ToolUsageCallback()
+            update_trace_context(session_id=session_id, metadata={"source": "mcp_client_interactive"})
+            langfuse_callback = build_langchain_callback(
+                session_id=session_id,
+                metadata={"source": "mcp_client_interactive"},
+                update_trace=True,
+            )
+            callbacks = [tool_callback]
+            if langfuse_callback:
+                callbacks.append(langfuse_callback)
             
-            if query.lower() in ["exit", "quit", "q"]:
-                print("Goodbye!")
-                break
+            response = await agent.ainvoke(
+                {
+                    "messages": [
+                        {"role": "system", "content": AGENT_SYSTEM_MESSAGE},
+                        {"role": "user", "content": init_message}
+                    ]
+                },
+                config={"callbacks": callbacks}
+            )
             
-            if not query:
-                continue
+            # Show tool usage summary
+            print(tool_callback.get_tool_summary())
             
-            # Initialize table first if needed
-            init_message = f"""
-            Session ID: {session_id}
-            
-            User Query: {query}
-            
-            Please help me with this data analysis task. First, initialize the table from the session 
-            using initialize_data_table, then perform the requested operations.
-            """
-            
-            print("\n🤔 Thinking...")
-            try:
-                # Create callbacks to track tool usage + Langfuse tracing
-                tool_callback = ToolUsageCallback()
-                update_trace_context(session_id=session_id, metadata={"source": "mcp_client_interactive"})
-                langfuse_callback = build_langchain_callback(
-                    session_id=session_id,
-                    metadata={"source": "mcp_client_interactive"},
-                    update_trace=True,
-                )
-                callbacks = [tool_callback]
-                if langfuse_callback:
-                    callbacks.append(langfuse_callback)
-                
-                response = await agent.ainvoke(
-                    {
-                        "messages": [
-                            {"role": "system", "content": AGENT_SYSTEM_MESSAGE},
-                            {"role": "user", "content": init_message}
-                        ]
-                    },
-                    config={"callbacks": callbacks}
-                )
-                
-                # Show tool usage summary
-                print(tool_callback.get_tool_summary())
-                
-                answer = response["messages"][-1].content
-                print(f"\n🤖 Assistant: {answer}\n")
-            except Exception as e:
-                print(f"\n❌ Error: {e}\n")
+            answer = response["messages"][-1].content
+            print(f"\n🤖 Assistant: {answer}\n")
+        except Exception as e:
+            print(f"\n❌ Error: {e}\n")
     
-    finally:
-        await _cleanup_client(client)
-
 
 def main():
     """Main entry point."""

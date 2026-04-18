@@ -16,3 +16,5 @@ context/
 /graphify-out/
 /graphify-out/obsidian/
 .claude/
+.devcontainer/
+.cursor/

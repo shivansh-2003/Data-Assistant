@@ -348,13 +348,58 @@ class RedisCloudStore(BaseSessionStore):
         try:
             graph = self.get_graph(session_id)
             append_lineage(graph, parent_vid, new_vid, operation, query)
-            key = KEY_SESSION_GRAPH.format(sid=session_id)
-            self._set_with_ttl(key, json.dumps(graph, default=str).encode("utf-8"), self.session_ttl)
-            self.extend_ttl(session_id)
+            key_graph = KEY_SESSION_GRAPH.format(sid=session_id)
+            key_tables = KEY_SESSION_TABLES.format(sid=session_id)
+            key_meta = KEY_SESSION_META.format(sid=session_id)
+            payload = json.dumps(graph, default=str).encode("utf-8")
+            pipe = self._client.pipeline()
+            pipe.set(key_graph, payload, ex=self.session_ttl)
+            pipe.expire(key_tables, self.session_ttl)
+            pipe.expire(key_meta, self.session_ttl)
+            pipe.execute()
             return True
         except Exception as e:
             logger.error("Failed to update graph for %s: %s", session_id, e)
             return False
+
+    def snapshot_session_as_version(self, session_id: str, version_id: str) -> bool:
+        if not self.is_connected():
+            return False
+        src = KEY_SESSION_TABLES.format(sid=session_id)
+        dst = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
+        try:
+            if not self._client.exists(src):
+                return False
+            ok = self._client.copy(src, dst, replace=True)
+            if ok:
+                self._client.expire(dst, self.session_ttl)
+                return True
+        except Exception as e:
+            logger.warning("Redis COPY snapshot failed, using load/save fallback: %s", e)
+        tables = self.load_session(session_id)
+        if tables is None:
+            return False
+        return self.save_version(session_id, version_id, tables)
+
+    def restore_version_as_session(self, session_id: str, version_id: str) -> bool:
+        if not self.is_connected():
+            return False
+        src = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
+        dst = KEY_SESSION_TABLES.format(sid=session_id)
+        try:
+            if not self._client.exists(src):
+                return False
+            ok = self._client.copy(src, dst, replace=True)
+            if ok:
+                self._client.expire(dst, self.session_ttl)
+                return True
+        except Exception as e:
+            logger.warning("Redis COPY restore failed, using load/save fallback: %s", e)
+        tables = self.load_version(session_id, version_id)
+        if tables is None:
+            return False
+        meta = self.get_metadata(session_id) or {}
+        return self.save_session(session_id, tables, meta)
 
     def scan_keys(self, pattern: str) -> List[str]:
         return self._scan_keys(pattern)

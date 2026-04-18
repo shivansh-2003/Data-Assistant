@@ -16,7 +16,6 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
 
 # =============================================================================
 # Third-party — load .env first so every subsequent import sees the right env vars
@@ -25,7 +24,6 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
-import httpx
 import pandas as pd
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
@@ -38,7 +36,6 @@ from pydantic import BaseModel
 # Local
 # =============================================================================
 from ingestion.config import IngestionConfig
-from ingestion.supabase_handler import load_supabase_tables
 from redis_db.constants import KEY_SESSION_GRAPH
 
 # =============================================================================
@@ -59,6 +56,26 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Perf logger — all timing lines use the "perf" logger so they can be
+# grep'd with:  grep '\[PERF\]' <logfile>
+# ---------------------------------------------------------------------------
+_perf_log = logging.getLogger("perf")
+
+try:
+    from perf_logger import BENCHMARKS as _BENCHMARKS
+except ImportError:
+    _BENCHMARKS = {}
+
+
+def _perf_warn(name: str, elapsed: float, session_id: str = "") -> None:
+    threshold = _BENCHMARKS.get(name)
+    if threshold and elapsed > threshold:
+        _perf_log.warning(
+            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1f× over)",
+            name, session_id, elapsed, threshold, elapsed / threshold,
+        )
 
 # Confirm MCP registration immediately so startup logs show what is wired up.
 logger.info(
@@ -102,19 +119,6 @@ def get_default_store():
 # Pydantic models
 # =============================================================================
 
-class UrlIngestionRequest(BaseModel):
-    """Request model for URL-based file ingestion."""
-    url: str
-    file_type: Optional[str] = None
-    session_id: Optional[str] = None
-
-
-class SupabaseIngestionRequest(BaseModel):
-    """Request model for Supabase database import."""
-    connection_string: str
-    db_schema: str = "public"  # renamed from 'schema' to avoid shadowing built-in
-    session_id: Optional[str] = None
-    project_name: Optional[str] = None
 
 # =============================================================================
 # MCP HTTP app — must be created before FastAPI so its lifespan is available
@@ -287,9 +291,7 @@ async def root():
         "redis_connected": get_default_store().is_connected(),
         "endpoints": {
             "file_upload": "/api/ingestion/file-upload",
-            "url_upload": "/api/ingestion/url-upload",
-            "supabase_import": "/api/ingestion/supabase-import",
-            "health": "/health",
+"health": "/health",
             "debug_redis": "/api/debug/redis",
             "session_tables": "GET /api/session/{session_id}/tables",
             "session_delete": "DELETE /api/session/{session_id}",
@@ -387,73 +389,6 @@ async def file_upload(
     return JSONResponse(content=response_data)
 
 
-@app.post("/api/ingestion/url-upload")
-@observe(name="api_url_upload", as_type="span")
-async def url_upload(request: UrlIngestionRequest):
-    session_id = _generate_session_id(request.session_id)
-    parsed = urlparse(request.url)
-    if parsed.scheme not in {"http", "https"}:
-        raise HTTPException(status_code=400, detail="Only http/https URLs are supported")
-
-    filename = os.path.basename(parsed.path) or "downloaded_file"
-    temp_file_path = os.path.join(_get_temp_dir(), f"{session_id}_{filename}")
-
-    async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
-        response = await client.get(request.url)
-        response.raise_for_status()
-        content = response.content
-
-    max_size = IngestionConfig.MAX_FILE_SIZE if IngestionConfig else 100 * 1024 * 1024
-    if len(content) > max_size:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File size exceeds maximum ({max_size / (1024 * 1024)}MB)",
-        )
-    if len(content) < 1:
-        raise HTTPException(status_code=400, detail="Downloaded file is empty")
-
-    with open(temp_file_path, "wb") as f:
-        f.write(content)
-
-    result = get_default_handler().process_file(
-        temp_file_path, request.file_type, response.headers.get("content-type")
-    )
-    response_data = _build_response_and_store(session_id, result, filename, source="url_upload")
-
-    if os.path.exists(temp_file_path):
-        os.remove(temp_file_path)
-
-    return JSONResponse(content=response_data)
-
-
-@app.post("/api/ingestion/supabase-import")
-@observe(name="api_supabase_import", as_type="span")
-async def supabase_import(request: SupabaseIngestionRequest):
-    if not load_supabase_tables:
-        raise HTTPException(status_code=503, detail="Supabase import not available")
-
-    session_id = _generate_session_id(request.session_id)
-    tables = load_supabase_tables(
-        connection_string=request.connection_string, schema=request.db_schema
-    )
-    result = {
-        "success": len(tables) > 0,
-        "tables": tables,
-        "metadata": {
-            "file_type": "supabase",
-            "table_count": len(tables),
-            "processing_time": 0,
-            "errors": [] if tables else ["No tables found"],
-            "file_path": request.project_name or "supabase",
-        },
-    }
-    response_data = _build_response_and_store(
-        session_id, result,
-        request.project_name or "supabase",
-        file_type_override="supabase",
-        source="supabase",
-    )
-    return JSONResponse(content=response_data)
 
 # =============================================================================
 # Routes — session management
@@ -629,6 +564,11 @@ async def get_version_tables(session_id: str, version_id: str):
 
 @app.post("/api/session/{session_id}/branch")
 async def create_branch(session_id: str, request_data: Dict[str, Any]):
+    """
+    Benchmark: < 0.5 s total.
+    redis.restore_copy (Redis COPY) should be < 0.1 s.
+    Fallback (load_version + save_session) can reach 1–3 s for large tables.
+    """
     store = get_default_store()
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
@@ -637,24 +577,48 @@ async def create_branch(session_id: str, request_data: Dict[str, Any]):
     if not version_id:
         raise HTTPException(status_code=400, detail="version_id is required")
 
-    tables = store.load_version(session_id, version_id)
-    if tables is None:
-        raise HTTPException(status_code=404, detail=f"Version '{version_id}' not found")
+    _t0 = time.perf_counter()
+    _perf_log.info(
+        "[PERF] api.branch START  session=%s  target_version=%s",
+        session_id, version_id,
+    )
 
-    metadata = store.get_metadata(session_id) or {}
-    if store.save_session(session_id, tables, metadata):
-        store.set_current_version(session_id, version_id)
-        store.extend_ttl(session_id)
-        return JSONResponse(content={
-            "success": True,
-            "message": f"Branched to {version_id}",
-            "version_id": version_id,
-        })
-    raise HTTPException(status_code=500, detail="Failed to save session")
+    # ── restore version → current session ────────────────────────────────────
+    _t_restore = time.perf_counter()
+    ok = store.restore_version_as_session(session_id, version_id)
+    _t_restore_elapsed = time.perf_counter() - _t_restore
+    _perf_log.info(
+        "[PERF] api.branch.restore  session=%s  version=%s  duration=%.3fs  ok=%s",
+        session_id, version_id, _t_restore_elapsed, ok,
+    )
+    _perf_warn("api.branch.restore", _t_restore_elapsed, session_id)
+
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Version '{version_id}' not found or restore failed")
+
+    store.set_current_version(session_id, version_id)
+    store.extend_ttl(session_id)
+
+    _t_total = time.perf_counter() - _t0
+    _perf_log.info(
+        "[PERF] api.branch END  session=%s  version=%s  restore=%.3fs  total=%.3fs",
+        session_id, version_id, _t_restore_elapsed, _t_total,
+    )
+    _perf_warn("api.branch", _t_total, session_id)
+
+    return JSONResponse(content={
+        "success": True,
+        "message": f"Branched to {version_id}",
+        "version_id": version_id,
+    })
 
 
 @app.post("/api/session/{session_id}/save_version")
 async def save_version_endpoint(session_id: str, request_data: Dict[str, Any]):
+    """
+    Benchmark: < 1.0 s total.
+    snapshot (Redis COPY) < 0.1 s; update_graph < 0.5 s.
+    """
     store = get_default_store()
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
@@ -666,17 +630,49 @@ async def save_version_endpoint(session_id: str, request_data: Dict[str, Any]):
     if not version_id:
         raise HTTPException(status_code=400, detail="version_id is required")
 
-    tables = store.load_session(session_id)
-    if tables is None:
-        raise HTTPException(status_code=404, detail=f"Session '{session_id}' tables not found")
+    _t0 = time.perf_counter()
+    _perf_log.info(
+        "[PERF] api.save_version START  session=%s  version=%s",
+        session_id, version_id,
+    )
 
     current_vid = store.get_current_version(session_id) or "v0"
-    if store.save_version(session_id, version_id, tables):
+
+    # ── snapshot ──────────────────────────────────────────────────────────────
+    _t_snap = time.perf_counter()
+    snap_ok = store.snapshot_session_as_version(session_id, version_id)
+    _t_snap_elapsed = time.perf_counter() - _t_snap
+    _perf_log.info(
+        "[PERF] api.save_version.snapshot  session=%s  version=%s  duration=%.3fs  ok=%s",
+        session_id, version_id, _t_snap_elapsed, snap_ok,
+    )
+    _perf_warn("api.save_version.snapshot", _t_snap_elapsed, session_id)
+
+    if snap_ok:
+        # ── graph update ──────────────────────────────────────────────────────
+        _t_graph = time.perf_counter()
         store.update_graph(
             session_id, parent_vid=current_vid, new_vid=version_id,
             operation=operation, query=query,
         )
+        _t_graph_elapsed = time.perf_counter() - _t_graph
+        _perf_log.info(
+            "[PERF] api.save_version.update_graph  session=%s  version=%s  duration=%.3fs",
+            session_id, version_id, _t_graph_elapsed,
+        )
+        _perf_warn("api.save_version.update_graph", _t_graph_elapsed, session_id)
+
         store.set_current_version(session_id, version_id)
+        store.extend_ttl(session_id)
+
+        _t_total = time.perf_counter() - _t0
+        _perf_log.info(
+            "[PERF] api.save_version END  session=%s  version=%s  "
+            "snapshot=%.3fs  graph=%.3fs  total=%.3fs",
+            session_id, version_id, _t_snap_elapsed, _t_graph_elapsed, _t_total,
+        )
+        _perf_warn("api.save_version", _t_total, session_id)
+
         return JSONResponse(content={
             "success": True,
             "message": f"Version {version_id} saved",

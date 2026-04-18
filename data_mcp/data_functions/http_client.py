@@ -6,12 +6,33 @@ Handles loading and saving DataFrames via HTTP requests with base64 pickle seria
 import os
 import base64
 import pickle
+import time as _time
+import logging
 import requests
 import pandas as pd
 from typing import Dict, Any, Optional
-import logging
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Perf logger
+# ---------------------------------------------------------------------------
+_perf_log = logging.getLogger("perf")
+
+try:
+    from perf_logger import BENCHMARKS as _BENCHMARKS
+except ImportError:
+    _BENCHMARKS = {}
+
+
+def _perf_warn(name: str, elapsed: float, session_id: str = "") -> None:
+    threshold = _BENCHMARKS.get(name)
+    if threshold and elapsed > threshold:
+        _perf_log.warning(
+            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1f× over)",
+            name, session_id, elapsed, threshold, elapsed / threshold,
+        )
+
 
 # Configuration
 # INGESTION_API_URL = "https://data-assistant-hj5f.onrender.com"
@@ -77,41 +98,55 @@ class IngestionAPIClient:
     def load_tables_from_api(self, session_id: str) -> Optional[Dict[str, pd.DataFrame]]:
         """
         Load all tables from a session via HTTP API.
-        
+        Benchmark: < 1.0 s total (HTTP GET < 0.60 s, deserialize < 0.20 s).
+
         Args:
             session_id: Unique session identifier
-            
+
         Returns:
             Dictionary mapping table names to DataFrames, or None if session not found
         """
+        _t0 = _time.perf_counter()
+        _perf_log.info(
+            "[PERF] http.load_tables START  session=%s  url=%s/api/session/%s/tables",
+            session_id, self.base_url, session_id,
+        )
         try:
             url = f"{self.base_url}/api/session/{session_id}/tables"
-            params = {"format": "full"}  # Request full DataFrame data
-            
-            logger.info(f"Loading tables from session {session_id} via HTTP: {url}")
+            params = {"format": "full"}
+
+            # ── HTTP GET ──────────────────────────────────────────────────────
+            _t_http = _time.perf_counter()
             response = self.session.get(url, params=params, timeout=self.timeout)
-            
+            _t_http_e = _time.perf_counter() - _t_http
+            _perf_log.info(
+                "[PERF] http.load_tables.http  session=%s  status=%d  duration=%.3fs  "
+                "response_kb=%.1f",
+                session_id, response.status_code, _t_http_e,
+                len(response.content) / 1024,
+            )
+            _perf_warn("http.load_tables.http", _t_http_e, session_id)
+
             if response.status_code == 404:
                 logger.warning(f"Session {session_id} not found at {url}")
                 return None
-            
+
             if response.status_code != 200:
                 logger.error(f"Unexpected status code {response.status_code} from {url}: {response.text}")
                 response.raise_for_status()
-                
+
             response.raise_for_status()
-            
             data = response.json()
             logger.debug(f"Received response with {len(data.get('tables', []))} tables")
-            
-            # Extract base64-encoded DataFrames
+
+            # ── deserialize ───────────────────────────────────────────────────
+            _t_des = _time.perf_counter()
             tables_dict = {}
             for table_info in data.get("tables", []):
                 table_name = table_info.get("table_name")
                 base64_data = table_info.get("data")
-                
+
                 if table_name and base64_data:
-                    # Deserialize single DataFrame from base64 pickle
                     try:
                         pickle_bytes = base64.b64decode(base64_data.encode('utf-8'))
                         df = pickle.loads(pickle_bytes)
@@ -122,10 +157,22 @@ class IngestionAPIClient:
                     except Exception as e:
                         logger.error(f"Failed to deserialize table '{table_name}': {e}")
                         raise
-            
+            _t_des_e = _time.perf_counter() - _t_des
+            _perf_log.info(
+                "[PERF] http.load_tables.deserialize  session=%s  duration=%.3fs  table_count=%d",
+                session_id, _t_des_e, len(tables_dict),
+            )
+            _perf_warn("http.load_tables.deserialize", _t_des_e, session_id)
+
+            _t_total = _time.perf_counter() - _t0
+            _perf_log.info(
+                "[PERF] http.load_tables END  session=%s  http=%.3fs  deserialize=%.3fs  total=%.3fs",
+                session_id, _t_http_e, _t_des_e, _t_total,
+            )
+            _perf_warn("http.load_tables", _t_total, session_id)
             logger.info(f"Successfully loaded {len(tables_dict)} tables from session {session_id}")
             return tables_dict
-            
+
         except requests.exceptions.RequestException as e:
             logger.error(f"HTTP error loading tables from session {session_id}: {e}")
             raise
@@ -134,60 +181,80 @@ class IngestionAPIClient:
             raise
     
     def save_tables_to_api(
-        self, 
-        session_id: str, 
+        self,
+        session_id: str,
         tables_dict: Dict[str, pd.DataFrame],
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Save tables to a session via HTTP API.
-        
+        Benchmark: < 1.2 s total (serialize < 0.20 s, HTTP PUT < 0.80 s).
+
         Args:
             session_id: Unique session identifier
             tables_dict: Dictionary mapping table names to DataFrames
             metadata: Optional session metadata
-            
+
         Returns:
             True if successful, False otherwise
         """
+        _t0 = _time.perf_counter()
+        _perf_log.info(
+            "[PERF] http.save_tables START  session=%s  table_count=%d",
+            session_id, len(tables_dict),
+        )
         try:
             url = f"{self.base_url}/api/session/{session_id}/tables"
-            
-            # Prepare the payload with serialized DataFrames
+
+            # ── serialize ─────────────────────────────────────────────────────
+            _t_ser = _time.perf_counter()
             tables_data = {}
             for table_name, df in tables_dict.items():
-                # Serialize each DataFrame individually (not as a dict)
                 pickle_bytes = pickle.dumps(df)
                 base64_data = base64.b64encode(pickle_bytes).decode('utf-8')
-                
                 tables_data[table_name] = {
                     "data": base64_data,
                     "row_count": len(df),
                     "column_count": len(df.columns),
                     "columns": list(df.columns),
-                    "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()}
+                    "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
                 }
-            
-            payload = {
-                "tables": tables_data,
-                "metadata": metadata or {}
-            }
-            
+            payload = {"tables": tables_data, "metadata": metadata or {}}
+            payload_kb = sum(len(v["data"]) for v in tables_data.values()) / 1024
+            _t_ser_e = _time.perf_counter() - _t_ser
+            _perf_log.info(
+                "[PERF] http.save_tables.serialize  session=%s  duration=%.3fs  payload_kb=%.1f",
+                session_id, _t_ser_e, payload_kb,
+            )
+            _perf_warn("http.save_tables.serialize", _t_ser_e, session_id)
+
+            # ── HTTP PUT ──────────────────────────────────────────────────────
             logger.info(f"Saving {len(tables_dict)} tables to session {session_id} via HTTP")
+            _t_http = _time.perf_counter()
             response = self.session.put(url, json=payload, timeout=self.timeout)
-            
+            _t_http_e = _time.perf_counter() - _t_http
+            _perf_log.info(
+                "[PERF] http.save_tables.http  session=%s  status=%d  duration=%.3fs",
+                session_id, response.status_code, _t_http_e,
+            )
+            _perf_warn("http.save_tables.http", _t_http_e, session_id)
+
             response.raise_for_status()
-            
             result = response.json()
             success = result.get("success", False)
             
+            _t_total = _time.perf_counter() - _t0
+            _perf_log.info(
+                "[PERF] http.save_tables END  session=%s  serialize=%.3fs  http=%.3fs  total=%.3fs  success=%s",
+                session_id, _t_ser_e, _t_http_e, _t_total, success,
+            )
+            _perf_warn("http.save_tables", _t_total, session_id)
             if success:
                 logger.info(f"Successfully saved tables to session {session_id}")
             else:
                 logger.error(f"Failed to save tables to session {session_id}: {result.get('error', 'Unknown error')}")
-            
             return success
-            
+
         except requests.exceptions.RequestException as e:
             logger.error(f"HTTP error saving tables to session {session_id}: {e}")
             raise

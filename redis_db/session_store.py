@@ -77,6 +77,16 @@ class BaseSessionStore(ABC, CurrentVersionMixin):
         query: Optional[str] = None,
     ) -> bool: ...
 
+    @abstractmethod
+    def snapshot_session_as_version(self, session_id: str, version_id: str) -> bool:
+        """Point-in-time copy of live session tables to a version key (prefer Redis COPY)."""
+        ...
+
+    @abstractmethod
+    def restore_version_as_session(self, session_id: str, version_id: str) -> bool:
+        """Copy a version snapshot back to live session tables (prefer Redis COPY)."""
+        ...
+
 
 def get_session_store() -> BaseSessionStore:
     if use_redis_cloud_kv():

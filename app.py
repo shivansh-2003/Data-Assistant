@@ -29,8 +29,25 @@ from chatbot.streamlit_ui import render_chatbot_tab
 from components.data_table import render_advanced_table
 from components.empty_state import render_empty_state
 from observability.langfuse_client import update_trace_context
+from perf_logger import BENCHMARKS as _BENCHMARKS
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Shared perf logger — one named logger keeps it easy to grep / filter
+# ---------------------------------------------------------------------------
+import logging as _logging
+perf_logger = _logging.getLogger("perf")
+
+
+def _benchmark_warn(name: str, elapsed: float, session_id: str = "") -> None:
+    """Emit a SLOW warning if elapsed exceeds the benchmark ceiling."""
+    threshold = _BENCHMARKS.get(name)
+    if threshold and elapsed > threshold:
+        perf_logger.warning(
+            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1f× over)",
+            name, session_id, elapsed, threshold, elapsed / threshold,
+        )
 
 # Configuration using Streamlit secrets
 # Falls back to environment variables if secrets not defined
@@ -56,6 +73,11 @@ def get_secret(key_path, fallback_env=None, default=None):
 FASTAPI_URL = os.getenv("FASTAPI_URL", "http://127.0.0.1:8000").rstrip("/")
 HTTP_TIMEOUT = int(os.getenv("HTTP_CLIENT_TIMEOUT", "30"))
 HTTP_TIMEOUT_LONG = int(os.getenv("HTTP_CLIENT_TIMEOUT_LONG", "120"))
+# PERF_LOG=1: logs analyze_data_sync and post-op (cache clear + save_version) timings.
+# Manual Tier-1 checks: (1) Execute a manipulation query — watch logs; (2) Branch to an older
+# version — session restores, no duplicate version ids; (3) Prune if available — rerun graph,
+# confirm next version id matches node count.
+PERF_LOG = os.getenv("PERF_LOG", "").lower() in ("1", "true", "yes")
 UPLOAD_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/file-upload"
 HEALTH_ENDPOINT = f"{FASTAPI_URL}/health"
 CONFIG_ENDPOINT = f"{FASTAPI_URL}/api/ingestion/config"
@@ -528,38 +550,6 @@ def upload_file(file, file_type: str = None, session_id: str = None) -> Dict:
         return {"success": False, "error": str(e)}
 
 
-def upload_url(url: str, file_type: str = None, session_id: str = None) -> Dict:
-    """Upload a file from a URL to FastAPI endpoint."""
-    try:
-        payload = {"url": url}
-        if file_type:
-            payload["file_type"] = file_type
-        if session_id:
-            payload["session_id"] = session_id
-        response = requests.post(f"{FASTAPI_URL}/api/ingestion/url-upload", json=payload, timeout=60)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        return {"success": False, "error": str(e)}
-
-
-def upload_supabase(connection_string: str, schema: str = "public",
-                    session_id: str = None, project_name: str = None) -> Dict:
-    """Import tables from Supabase using a Postgres connection string."""
-    try:
-        payload = {"connection_string": connection_string, "schema": schema}
-        if session_id:
-            payload["session_id"] = session_id
-        if project_name:
-            payload["project_name"] = project_name
-        response = requests.post(f"{FASTAPI_URL}/api/ingestion/supabase-import", json=payload, timeout=120)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        return {"success": False, "error": str(e)}
-
-
-
 
 def delete_redis_session(session_id: str) -> bool:
     """Delete session data from Redis."""
@@ -599,22 +589,44 @@ def save_session_id(session_id: str):
 def analyze_data_sync(session_id: str, query: str) -> Dict[str, Any]:
     """
     Synchronous wrapper for MCP client analyze_data function.
-    
+
+    Benchmark target: < 15 s end-to-end (LLM is ~3-12 s; non-LLM overhead
+    should be < 2 s).  Set PERF_LOG=1 to activate threshold warnings.
+
     Args:
         session_id: Session ID containing the data in Redis
         query: Natural language query describing what to do with the data
-        
+
     Returns:
         Dict with 'success', 'response', and optional 'error' keys
     """
+    import time as _time
+    from perf_logger import perf_logger as _pl
+
+    t0 = _time.perf_counter()
+    _pl.info(
+        "[PERF] app.analyze_data_sync START  session=%s  query_len=%d",
+        session_id, len(query),
+    )
     try:
         # Import here to avoid issues if mcp_client not available
         from mcp_client import analyze_data
-        
+
         # Run async function in sync context
         response = asyncio.run(analyze_data(session_id, query))
+        elapsed = _time.perf_counter() - t0
+        _pl.info(
+            "[PERF] app.analyze_data_sync END  session=%s  duration=%.3fs  status=success",
+            session_id, elapsed,
+        )
+        _benchmark_warn("app.analyze_data_sync", elapsed, session_id)
         return {"success": True, "response": response}
     except Exception as e:
+        elapsed = _time.perf_counter() - t0
+        _pl.info(
+            "[PERF] app.analyze_data_sync END  session=%s  duration=%.3fs  status=error  error=%s",
+            session_id, elapsed, type(e).__name__,
+        )
         return {"success": False, "error": str(e)}
 
 
@@ -1006,83 +1018,6 @@ def render_upload_tab():
             - Column information and statistics
             """)
 
-    st.divider()
-    card_open("card-elevated")
-    st.markdown('<h2 class="section-title">🌐 Upload From URL</h2>', unsafe_allow_html=True)
-    with st.expander("Import a file from a URL", expanded=False):
-        url_input = st.text_input(
-            "File URL (http/https)",
-            placeholder="https://example.com/data.csv",
-            help="Paste a direct link to a CSV, Excel, or image file"
-        )
-        url_file_type_hint = st.selectbox(
-            "File Type (Optional - Auto-detected if not specified)",
-            ["Auto-detect", "csv", "excel", "image"],
-            key="url_file_type_hint"
-        )
-        url_file_type = None if url_file_type_hint == "Auto-detect" else url_file_type_hint
-        url_session_id = st.text_input(
-            "Session ID (Optional)",
-            key="url_session_id",
-            help="Optional session identifier for tracking"
-        )
-        if st.button("⬇️ Fetch & Process URL", key="url_upload_button", type="primary"):
-            if not url_input:
-                st.warning("Please provide a valid URL.")
-            else:
-                with st.status("Downloading and processing URL...", expanded=True) as status:
-                    progress = st.progress(0)
-                    progress.progress(0.2, text="Fetching file")
-                    result = upload_url(url_input, url_file_type, url_session_id if url_session_id else None)
-                    progress.progress(0.8, text="Extracting tables")
-                    render_ingestion_result(result, session_id_input=url_session_id)
-                    progress.progress(1.0, text="Completed")
-                    status.update(label="Processing complete", state="complete")
-    card_close()
-
-    st.divider()
-    card_open("card-elevated")
-    st.markdown('<h2 class="section-title">🧩 Import From Supabase</h2>', unsafe_allow_html=True)
-    with st.expander("Connect using Postgres connection string", expanded=False):
-        project_name = st.text_input(
-            "Project Name (Optional)",
-            key="supabase_project_name",
-            help="Helps label the session for easier tracking"
-        )
-        connection_string = st.text_input(
-            "Postgres Connection String (Required)",
-            type="password",
-            key="supabase_connection_string",
-            placeholder="postgres://user:password@db.<project>.supabase.co:5432/postgres"
-        )
-        schema_name = st.text_input(
-            "Schema (Optional)",
-            value="public",
-            key="supabase_schema"
-        )
-        supabase_session_id = st.text_input(
-            "Session ID (Optional)",
-            key="supabase_session_id",
-            help="Optional session identifier for tracking"
-        )
-        if st.button("🔗 Import Supabase Tables", key="supabase_import_button", type="primary"):
-            if not connection_string:
-                st.warning("Please provide a connection string.")
-            else:
-                with st.status("Connecting to Supabase and importing tables...", expanded=True) as status:
-                    progress = st.progress(0)
-                    progress.progress(0.3, text="Connecting to Supabase")
-                    result = upload_supabase(
-                        connection_string=connection_string,
-                        schema=schema_name or "public",
-                        session_id=supabase_session_id if supabase_session_id else None,
-                        project_name=project_name or None
-                    )
-                    progress.progress(0.9, text="Importing tables")
-                    render_ingestion_result(result, session_id_input=supabase_session_id)
-                    progress.progress(1.0, text="Completed")
-                    status.update(label="Import complete", state="complete")
-    card_close()
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -1097,422 +1032,372 @@ def _fetch_version_graph(session_id: str) -> dict:
 
 def render_manipulation_tab():
     """Render the Data Manipulation tab content."""
-    st.markdown(
-        '<div class="hero-section" role="region" aria-label="Data Manipulation">'
-        '<h1 class="main-header">🔧 Data Manipulation</h1>'
-        '<p class="section-subtitle">Use natural language to transform your data. Each operation creates a new version you can revisit.</p>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown("## 🔧 Data Manipulation")
 
-    render_onboarding_tip(
-        "Try a transformation",
-        [
-            "Pick a table and review the current state.",
-            "Type a natural language query (e.g., filter, sort, group).",
-            "Execute to create a new version in the history graph."
-        ],
-        cta_label="Use example query",
-        cta_key="cta_manipulation_example"
-    )
-    
     session_id = st.session_state.get("current_session_id")
-    
-    # Check if session exists
+
+    # ── Guard: no session ────────────────────────────────────────────────────
     if not session_id:
         render_empty_state(
             title="No data loaded yet",
-            message="Upload a file in the Upload tab first. Then you can transform your data with natural language here.",
+            message="Upload a file in the Upload tab first.",
             primary_action_label="Go to Upload",
             primary_action_key="empty_manipulation_upload",
-            secondary_action_label="Example queries",
-            secondary_action_key="empty_manipulation_examples",
             icon="🔧",
         )
-        with st.expander("💡 Example Queries (after uploading data)"):
-            st.markdown("""
-            - "Remove rows with missing values in the 'email' column"
-            - "Sort the data by 'revenue' in descending order"
-            - "Filter rows where 'age' is greater than 18"
-            - "Create a new column 'full_name' by combining 'first_name' and 'last_name'"
-            - "Group by 'department' and calculate average 'salary'"
-            - "Drop columns 'temp1' and 'temp2'"
-            """)
         return
-    
-    # Get session metadata and extend TTL
+
+    # ── Load metadata ────────────────────────────────────────────────────────
     metadata = get_session_metadata_for_display(session_id)
     if not metadata:
         st.error(f"❌ Session '{session_id}' not found or expired. Please upload a new file.")
-        # Clear session state
         st.session_state.current_session_id = None
         if "sid" in st.query_params:
             del st.query_params["sid"]
         return
-    
-    # Extend session TTL on access — throttled to once per minute to avoid
-    # an extra HTTP call on every widget interaction within the tab.
+
+    # Extend TTL once per minute (no HTTP on every widget interaction)
     _extend_key = f"_last_extend_{session_id}"
     if time.time() - st.session_state.get(_extend_key, 0) > 60:
         try:
             requests.post(f"{SESSION_ENDPOINT}/{session_id}/extend", timeout=5)
-        except:
+        except Exception:
             pass
         st.session_state[_extend_key] = time.time()
-    
-    # Session Info Card
-    card_open("card-elevated")
-    st.subheader("📋 Session Information")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Session ID", session_id[:12] + "..." if len(session_id) > 12 else session_id)
-    with col2:
-        file_name = metadata.get("file_name", "Unknown")
-        st.metric("File Name", file_name[:20] + "..." if len(file_name) > 20 else file_name)
-    with col3:
-        st.metric("Tables", metadata.get("table_count", 0))
-    with col4:
-        created_at = metadata.get("created_at", 0)
-        if created_at:
-            dt = datetime.fromtimestamp(created_at)
-            st.metric("Created", dt.strftime("%H:%M:%S"))
-    
-    st.divider()
-    
-    # Get current tables
+
+    # ── Load tables ──────────────────────────────────────────────────────────
     tables_data = get_session_tables_for_display(session_id)
     if not tables_data:
         st.error("❌ Could not load tables from session.")
         return
-    
-    # Display current state metrics
-    st.subheader("📊 Current Data State")
     tables = tables_data.get("tables", {})
-    if tables:
-        # Show metrics for first table (or allow selection if multiple)
-        table_names = list(tables.keys())
-        selected_table = st.selectbox("Select Table", table_names, key="selected_table_manipulation")
-        
-        if selected_table:
-            table_info = tables[selected_table]
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Rows", f"{table_info.get('row_count', 0):,}")
-            with col2:
-                st.metric("Columns", table_info.get('column_count', 0))
-            with col3:
-                st.metric("Table Name", selected_table)
+    table_names = list(tables.keys())
+
+    # ── STATUS BAR — one compact line replacing two full cards ───────────────
+    file_name    = metadata.get("file_name", "Unknown")
+    current_ver  = metadata.get("current_version", "v0")
+
+    sb_left, sb_mid, sb_right = st.columns([4, 3, 3])
+    with sb_left:
+        st.markdown(
+            f"**📄 {file_name}** &nbsp;·&nbsp; `{current_ver}`",
+            help=f"Session: {session_id}",
+        )
+    with sb_mid:
+        if len(table_names) == 1:
+            selected_table = table_names[0]
+            tinfo = tables[selected_table]
+            st.caption(
+                f"{tinfo.get('row_count', 0):,} rows · {tinfo.get('column_count', 0)} cols"
+            )
+        else:
+            selected_table = st.selectbox(
+                "Table",
+                table_names,
+                key="selected_table_manipulation",
+                label_visibility="collapsed",
+            )
+    with sb_right:
+        if len(table_names) > 1 and selected_table:
+            tinfo = tables.get(selected_table, {})
+            st.caption(
+                f"{tinfo.get('row_count', 0):,} rows · {tinfo.get('column_count', 0)} cols"
+            )
+    # ensure selected_table is always set even for single-table sessions
+    if len(table_names) == 1:
+        selected_table = table_names[0]
+
+    st.divider()
     
-    card_close()
-    
-    # Version History Graph Section
+    # ── Version History ──────────────────────────────────────────────────────
     card_open("card-elevated", aria_label="Version history")
     st.subheader("📜 Version History")
-    st.caption("Track transformations over time. Filter versions and branch safely.")
-    
-    def _format_version_label(node: Dict, current_version: str) -> str:
-        vid = node.get("id", "unknown")
-        op = node.get("operation") or node.get("label", "Operation")
-        ts = node.get("timestamp")
-        ts_text = ""
-        if ts:
-            try:
-                ts_text = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
-            except Exception:
-                ts_text = ""
-        if vid == current_version:
-            return f"{vid} (current) - {op} {ts_text}".strip()
-        return f"{vid} - {op} {ts_text}".strip()
-    
+
+    # ── helper: one-shot branch call (shared by all branch buttons) ──────────
+    def _do_branch(target_vid: str) -> None:
+        _tb0 = time.perf_counter()
+        perf_logger.info(
+            "[PERF] app.branch_http START  session=%s  target_version=%s",
+            session_id, target_vid,
+        )
+        try:
+            r = requests.post(
+                f"{FASTAPI_URL}/api/session/{session_id}/branch",
+                json={"version_id": target_vid},
+                timeout=HTTP_TIMEOUT_LONG,
+            )
+            _tb = time.perf_counter() - _tb0
+            perf_logger.info(
+                "[PERF] app.branch_http END  session=%s  target_version=%s  "
+                "status=%d  duration=%.3fs",
+                session_id, target_vid, r.status_code, _tb,
+            )
+            _benchmark_warn("app.branch_http", _tb, session_id)
+            if r.status_code == 200:
+                get_full_table_dataframe.clear()
+                get_session_tables_for_display.clear()
+                get_session_metadata_for_display.clear()
+                _fetch_version_graph.clear()
+                st.toast(f"✅ Switched to {target_vid}", icon="🌿")
+                st.rerun()
+            else:
+                st.error(f"Branch failed (HTTP {r.status_code})")
+        except Exception as exc:
+            st.error(f"Error switching version: {exc}")
+
     def _normalize_graph(graph: Dict, current_version: str, search_text: str, keep_last_n: int) -> Dict:
         nodes = graph.get("nodes", [])
         edges = graph.get("edges", [])
-        
-        # Sort nodes by timestamp (newest first)
         nodes_sorted = sorted(nodes, key=lambda n: n.get("timestamp", 0), reverse=True)
         if keep_last_n:
             nodes_sorted = nodes_sorted[:keep_last_n]
-        
         if search_text:
-            search_text_lower = search_text.lower()
+            sl = search_text.lower()
             nodes_sorted = [
                 n for n in nodes_sorted
-                if search_text_lower in (n.get("operation", "") or n.get("label", "")).lower()
+                if sl in (n.get("operation", "") or n.get("label", "")).lower()
+                or sl in (n.get("query", "") or "").lower()
+                or sl in n.get("id", "").lower()
             ]
-        
         node_ids = {n.get("id") for n in nodes_sorted}
         edges_filtered = [e for e in edges if e.get("from") in node_ids and e.get("to") in node_ids]
-        
         return {"nodes": nodes_sorted, "edges": edges_filtered}
-    
+
     try:
         graph_data = _fetch_version_graph(session_id)
     except Exception:
         graph_data = {"nodes": [], "edges": []}
-    
-    # Filters and layout
-    if graph_data.get("nodes"):
-        filter_col, info_col = st.columns([2, 3])
-        with filter_col:
-            st.markdown("**Filters**")
-            keep_last_n = st.number_input(
-                "Show last N versions",
-                min_value=1,
-                max_value=200,
-                value=min(30, len(graph_data.get("nodes", []))),
-                help="Limit the number of versions to improve readability"
+
+    # Keep node count in session_state so execute-query can derive next vid cheaply
+    st.session_state[f"_version_graph_node_count_{session_id}"] = len(graph_data.get("nodes", []))
+
+    current_version = metadata.get("current_version", "v0")
+    nodes_all = graph_data.get("nodes", [])
+
+    if not nodes_all:
+        st.info("No versions yet. Run a query above to create the first snapshot.")
+    else:
+        # ── TOP BAR: quick-switch + search ───────────────────────────────────
+        qs_col, srch_col, n_col = st.columns([3, 3, 2])
+        with qs_col:
+            # Build options sorted newest-first; current version shown as default
+            sorted_nodes = sorted(nodes_all, key=lambda n: n.get("timestamp", 0), reverse=True)
+            qs_options = [n["id"] for n in sorted_nodes]
+
+            def _qs_label(vid: str) -> str:
+                node = next((n for n in sorted_nodes if n["id"] == vid), {})
+                op = (node.get("operation") or node.get("label", ""))[:35]
+                ts = node.get("timestamp")
+                ts_str = datetime.fromtimestamp(ts).strftime("%H:%M") if ts else ""
+                suffix = " ← current" if vid == current_version else ""
+                return f"{vid}  {ts_str}  {op}{suffix}"
+
+            default_idx = qs_options.index(current_version) if current_version in qs_options else 0
+            quick_pick = st.selectbox(
+                "⚡ Jump to version",
+                options=qs_options,
+                index=default_idx,
+                format_func=_qs_label,
+                key="vh_quick_pick",
+                help="Pick any version and click Switch — no confirmation needed.",
             )
+        with srch_col:
             search_text = st.text_input(
-                "Search operation text",
-                placeholder="e.g., filter, sort, missing"
+                "🔍 Filter list",
+                placeholder="operation, query keyword, version id…",
+                key="vh_search",
+                label_visibility="visible",
             )
+        with n_col:
+            keep_last_n = st.number_input(
+                "Show last N",
+                min_value=1,
+                max_value=500,
+                value=min(50, len(nodes_all)),
+                key="vh_keep_n",
+                help="Limit rows shown in the list below.",
+            )
+
+        # One-click Switch button for the quick-pick selection
+        sw_col, info_col = st.columns([2, 5])
+        with sw_col:
+            if quick_pick == current_version:
+                st.button(
+                    "✅ Already here",
+                    key="vh_qs_switch",
+                    disabled=True,
+                    use_container_width=True,
+                )
+            else:
+                if st.button(
+                    f"🌿 Switch to {quick_pick}",
+                    key="vh_qs_switch",
+                    type="primary",
+                    use_container_width=True,
+                    help="Instantly switch the active session to this version.",
+                ):
+                    with st.spinner(f"Switching to {quick_pick}…"):
+                        _do_branch(quick_pick)
         with info_col:
-            current_version = metadata.get("current_version", "v0")
-            st.markdown(f"**Current version:** `{current_version}`")
-            st.caption("Select a version to view details and branch.")
-        
+            picked_node = next((n for n in nodes_all if n["id"] == quick_pick), {})
+            if picked_node:
+                op = picked_node.get("operation") or picked_node.get("label", "")
+                q  = picked_node.get("query", "")
+                ts = picked_node.get("timestamp")
+                ts_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "—"
+                st.markdown(
+                    f"**{quick_pick}** &nbsp;·&nbsp; {ts_str}  \n"
+                    f"*{op}*" + (f"  \n`{q[:120]}`" if q else ""),
+                    help="Details of the selected version.",
+                )
+
+        st.divider()
+
+        # ── VERSION LIST — one row per version, instant Switch button ────────
         graph_data = _normalize_graph(graph_data, current_version, search_text, keep_last_n)
-        
-        view_mode = st.radio(
-            "View",
-            ["Graph view", "Timeline view"],
-            key="manipulation_version_view",
-            horizontal=True,
-            label_visibility="collapsed",
-        )
-    
-    # Render graph or timeline if nodes exist
-    if graph_data.get("nodes"):
-        current_version = metadata.get("current_version", "v0")
-        if st.session_state.get("manipulation_version_view", "Graph view") == "Timeline view":
-            # Timeline view: horizontal version cards
-            st.markdown('<div class="card" role="group" aria-label="Version timeline">', unsafe_allow_html=True)
-            st.caption("Click Branch to create a new branch from that version.")
-            nodes_list = graph_data.get("nodes", [])
-            # Show up to 8 in a row, then next row
-            chunk = 4
-            for i in range(0, len(nodes_list), chunk):
-                cols = st.columns(min(chunk, len(nodes_list) - i))
-                for j, node in enumerate(nodes_list[i : i + chunk]):
-                    with cols[j]:
-                        vid = node.get("id", "?")
-                        op = (node.get("operation") or node.get("label", "Operation"))[:40]
-                        ts = node.get("timestamp")
-                        ts_text = datetime.fromtimestamp(ts).strftime("%H:%M") if ts else ""
-                        is_current = vid == current_version
-                        st.markdown(f"**{vid}**" + (" *(current)*" if is_current else ""))
-                        st.caption(op + (" …" if len((node.get("operation") or "") or (node.get("label") or "")) > 40 else ""))
-                        st.caption(ts_text)
-                        if st.button("Branch", key=f"timeline_branch_{vid}", type="secondary"):
-                            try:
-                                r = requests.post(
-                                    f"{FASTAPI_URL}/api/session/{session_id}/branch",
-                                    json={"version_id": vid},
-                                    timeout=HTTP_TIMEOUT_LONG,
-                                )
-                                if r.status_code == 200:
-                                    st.success(f"Branched to {vid}")
-                                    st.rerun()
-                                else:
-                                    st.error("Branch failed")
-                            except Exception as e:
-                                st.error(str(e))
-            st.markdown("</div>", unsafe_allow_html=True)
-            st.markdown("---")
+        nodes_filtered = graph_data.get("nodes", [])
+
+        if not nodes_filtered:
+            st.caption("No versions match the current filter.")
         else:
-            # Graph view
-            dot = graphviz.Digraph(comment='Version History')
-            dot.attr(rankdir='LR')
-            dot.attr('node', shape='box', style='rounded,filled', fillcolor='lightblue')
+            # Column header
+            hc1, hc2, hc3, hc4 = st.columns([1.5, 1.5, 4, 1.5])
+            hc1.markdown("**Version**")
+            hc2.markdown("**Time**")
+            hc3.markdown("**Operation**")
+            hc4.markdown("**Action**")
+
+            for node in nodes_filtered:
+                vid      = node.get("id", "?")
+                op       = (node.get("operation") or node.get("label", "—"))
+                q        = node.get("query", "")
+                ts       = node.get("timestamp")
+                ts_str   = datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else "—"
+                is_curr  = vid == current_version
+
+                rc1, rc2, rc3, rc4 = st.columns([1.5, 1.5, 4, 1.5])
+
+                with rc1:
+                    if is_curr:
+                        st.markdown(f"🟢 **{vid}**", help="This is the currently active version.")
+                    else:
+                        st.markdown(f"⚪ {vid}")
+
+                with rc2:
+                    st.caption(ts_str)
+
+                with rc3:
+                    display_op = op[:70] + ("…" if len(op) > 70 else "")
+                    if q:
+                        st.markdown(
+                            f"{display_op}",
+                            help=f"Query: {q}",
+                        )
+                    else:
+                        st.markdown(display_op)
+
+                with rc4:
+                    if is_curr:
+                        st.caption("current")
+                    else:
+                        if st.button(
+                            "🌿 Switch",
+                            key=f"vh_switch_{vid}",
+                            type="secondary",
+                            use_container_width=True,
+                            help=f"Switch active session to {vid}",
+                        ):
+                            with st.spinner(f"Switching to {vid}…"):
+                                _do_branch(vid)
+
+        # ── Graphviz DAG (collapsible, for visual reference) ─────────────────
+        st.divider()
+        with st.expander("🔀 Show DAG / lineage graph", expanded=False):
+            dot = graphviz.Digraph(comment="Version History")
+            dot.attr(rankdir="LR")
+            dot.attr("node", shape="box", style="rounded,filled", fillcolor="lightblue")
             for node in graph_data.get("nodes", []):
-                label = _format_version_label(node, current_version)
-                is_current = node.get("id") == current_version
-                fill = "lightgreen" if is_current else "lightblue"
-                dot.node(node["id"], label, fillcolor=fill)
+                vid   = node.get("id", "?")
+                op    = (node.get("operation") or node.get("label", ""))[:30]
+                ts    = node.get("timestamp")
+                ts_s  = datetime.fromtimestamp(ts).strftime("%H:%M") if ts else ""
+                label = f"{vid}\n{op}\n{ts_s}".strip()
+                fill  = "lightgreen" if vid == current_version else "lightblue"
+                dot.node(vid, label, fillcolor=fill)
             for edge in graph_data.get("edges", []):
                 dot.edge(edge["from"], edge["to"], label=edge.get("label", ""))
             st.graphviz_chart(dot.source)
-            col1, col2 = st.columns([2, 2])
+
+        # ── Prune (collapsible) ───────────────────────────────────────────────
+        with st.expander("🗑️ Prune old versions", expanded=False):
+            col1, col2 = st.columns([2, 1])
             with col1:
-                version_options = [n["id"] for n in graph_data.get("nodes", [])]
-                selected_version = st.selectbox(
-                    "Select version",
-                    options=version_options,
-                    index=version_options.index(current_version) if current_version in version_options else 0,
-                    help="Pick a version to view details or branch from."
+                keep_n = st.number_input(
+                    "Keep last N versions",
+                    min_value=1,
+                    max_value=100,
+                    value=len(nodes_all),
+                    help="Delete old versions, keeping only the most recent N.",
+                    key="vh_prune_n",
                 )
             with col2:
-                version_node = next((n for n in graph_data.get("nodes", []) if n["id"] == selected_version), None)
-                if version_node:
-                    op_text = version_node.get("operation", "N/A")
-                    ts = version_node.get("timestamp")
-                    ts_text = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "N/A"
-                    st.markdown("**Version Details**")
-                    st.write(f"**Operation:** {op_text}")
-                    if version_node.get("query"):
-                        st.write(f"**Query:** {version_node.get('query')}")
-                    st.write(f"**Created:** {ts_text}")
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                confirm_branch = st.checkbox(
-                    "Confirm branch to selected version",
-                    value=False,
-                    help="Confirm before changing the active version"
+                prune_button = st.button(
+                    "Prune",
+                    type="secondary",
+                    help="Remove old versions.",
+                    key="vh_prune_btn",
                 )
-            with col2:
-                branch_button = st.button("🌿 Branch", type="secondary", help="Create a new branch from the selected version")
-            if branch_button:
-                if selected_version == current_version:
-                    st.info("You are already on this version.")
-                elif not confirm_branch:
-                    st.warning("Please confirm the branch action first.")
-                else:
-                    with st.spinner("Branching to selected version..."):
-                        try:
-                            branch_response = requests.post(
-                                f"{FASTAPI_URL}/api/session/{session_id}/branch",
-                                json={"version_id": selected_version},
-                                timeout=HTTP_TIMEOUT_LONG,
-                            )
-                            if branch_response.status_code == 200:
-                                st.success(f"✅ Branched to {selected_version}. New operations will start from here.")
-                                st.rerun()
-                            else:
-                                st.error("Failed to branch to version.")
-                        except Exception as e:
-                            st.error(f"Error branching: {e}")
-            if selected_version:
-                with st.expander(f"📋 Version Details: {selected_version}"):
-                    version_node = next((n for n in graph_data.get("nodes", []) if n["id"] == selected_version), None)
-                    if version_node:
-                        st.write(f"**Operation:** {version_node.get('operation', 'N/A')}")
-                        if version_node.get('query'):
-                            st.write(f"**Query:** {version_node.get('query')}")
-                        if version_node.get('timestamp'):
-                            dt = datetime.fromtimestamp(version_node['timestamp'])
-                            st.write(f"**Created:** {dt.strftime('%Y-%m-%d %H:%M:%S')}")
-            with st.expander("🗑️ Prune Versions"):
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    keep_n = st.number_input(
-                        "Keep last N versions",
-                        min_value=1,
-                        max_value=100,
-                        value=len(graph_data.get("nodes", [])),
-                        help="Prune old versions, keeping only the most recent N"
-                    )
-                with col2:
-                    prune_button = st.button("Prune", type="secondary", help="Remove old versions and keep the most recent N")
-                if prune_button:
-                    with st.spinner("Pruning versions..."):
-                        try:
-                            prune_response = requests.post(
-                                f"{FASTAPI_URL}/api/session/{session_id}/prune_versions",
-                                json={"keep_last_n": int(keep_n)},
-                                timeout=HTTP_TIMEOUT_LONG,
-                            )
-                            if prune_response.status_code == 200:
-                                st.success(f"✅ Pruned versions. Kept last {keep_n}.")
-                                st.rerun()
-                            else:
-                                st.error("Failed to prune versions.")
-                        except Exception as e:
-                            st.error(f"Error pruning: {e}")
-    else:
-        render_empty_state(
-            title="No versions yet",
-            message="Run a transformation above to build the version history graph.",
-            primary_action_label="Try a query",
-            primary_action_key="empty_version_history_try",
-            icon="📜",
-        )
-    
+            if prune_button:
+                with st.spinner("Pruning versions..."):
+                    try:
+                        prune_response = requests.post(
+                            f"{FASTAPI_URL}/api/session/{session_id}/prune_versions",
+                            json={"keep_last_n": int(keep_n)},
+                            timeout=HTTP_TIMEOUT_LONG,
+                        )
+                        if prune_response.status_code == 200:
+                            st.success(f"✅ Pruned versions. Kept last {keep_n}.")
+                            _fetch_version_graph.clear()
+                            st.rerun()
+                        else:
+                            st.error("Failed to prune versions.")
+                    except Exception as e:
+                        st.error(f"Error pruning: {e}")
+
     card_close()
     
     # Natural Language Query Input
-    card_open("card-elevated")
-    st.subheader("💬 Natural Language Query")
-    st.caption("Describe the transformation you want. You can chain multiple steps in one sentence.")
+    # ── QUERY INPUT ──────────────────────────────────────────────────────────
     query = st.text_area(
-        "Describe what you want to do with the data:",
-        placeholder="e.g., Remove rows with missing values in the 'email' column, then sort by 'revenue' descending",
-        height=100,
-        key="nl_query_input"
+        "💬 Describe your transformation",
+        placeholder='e.g. "Filter rows where age > 18 and sort by revenue descending"',
+        height=90,
+        key="nl_query_input",
+        label_visibility="visible",
     )
-    st.caption("Try:")
-    sug_a, sug_b, sug_c = st.columns(3)
-    with sug_a:
-        if st.button("Remove missing values", key="sug_missing"):
-            st.session_state["nl_query_input"] = "Remove rows with missing values"
-            st.rerun()
-    with sug_b:
-        if st.button("Sort by column descending", key="sug_sort"):
-            st.session_state["nl_query_input"] = "Sort by revenue descending"
-            st.rerun()
-    with sug_c:
-        if st.button("Group and aggregate", key="sug_group"):
-            st.session_state["nl_query_input"] = "Group by department and calculate average salary"
-            st.rerun()
-    
-    # Quick action chips
-    st.markdown("**Quick actions**")
-    chip1, chip2, chip3, chip4 = st.columns(4)
-    with chip1:
-        if st.button("Remove missing", key="quick_remove_missing"):
-            st.session_state["nl_query_input"] = "Remove rows with missing values"
-            st.rerun()
-    with chip2:
-        if st.button("Sort desc", key="quick_sort_desc"):
-            st.session_state["nl_query_input"] = "Sort by revenue descending"
-            st.rerun()
-    with chip3:
-        if st.button("Group avg", key="quick_group_avg"):
-            st.session_state["nl_query_input"] = "Group by department and calculate average salary"
-            st.rerun()
-    with chip4:
-        if st.button("Create column", key="quick_create_col"):
-            st.session_state["nl_query_input"] = "Create a new column full_name by combining first_name and last_name"
-            st.rerun()
-    
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        execute_button = st.button("🚀 Execute Query", type="primary", width='stretch', help="Run the query and update the data version")
-    
-    # Operation History
+
+    # Four compact example chips in one row
+    c1, c2, c3, c4 = st.columns(4)
+    _chips = [
+        ("Remove missing",  "Remove rows with missing values"),
+        ("Sort descending", "Sort by revenue descending"),
+        ("Group & average", "Group by department and calculate average salary"),
+        ("Create column",   "Create a new column full_name by combining first_name and last_name"),
+    ]
+    for col, (label, val) in zip([c1, c2, c3, c4], _chips):
+        with col:
+            if st.button(label, key=f"chip_{label}", use_container_width=True):
+                st.session_state["nl_query_input"] = val
+                st.rerun()
+
+    execute_button = st.button(
+        "🚀 Execute",
+        type="primary",
+        use_container_width=True,
+        help="Run the query and snapshot a new version",
+    )
+
     st.divider()
-    st.subheader("📜 Operation History")
-    
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        history_count = len(st.session_state.operation_history)
-        st.caption(f"Total operations: {history_count}")
-    with col2:
-        clear_history_button = st.button("🗑️ Clear History", width='stretch', help="Clear operation history from this session")
-    
-    # Handle clear history
-    if clear_history_button:
-        st.session_state.operation_history = []
-        st.success("✅ History cleared.")
-        st.rerun()
-    
-    # Display operation history
-    if st.session_state.operation_history:
-        with st.expander("View Operation History", expanded=False):
-            for idx, op in enumerate(reversed(st.session_state.operation_history[-10:]), 1):
-                dt = datetime.fromtimestamp(op["timestamp"])
-                version_id = op.get("version_id", "")
-                version_text = f" [{version_id}]" if version_id else ""
-                st.text(f"{idx}. [{dt.strftime('%H:%M:%S')}]{version_text} {op.get('description', op.get('operation', 'Unknown'))}")
-    else:
-        render_empty_state(
-            title="No operations yet",
-            message="Execute a natural language query above to see operations here.",
-            primary_action_label="Execute query",
-            primary_action_key="empty_op_history_execute",
-            icon="🔧",
-        )
-    
-    card_close()
     
     # Execute query
     if execute_button and query:
@@ -1531,35 +1416,52 @@ def render_manipulation_tab():
             progress = st.progress(0)
             try:
                 progress.progress(0.2, text="Sending query to analysis engine")
+
+                # ── PERF: LLM + MCP tool calls ──────────────────────────
+                _t_llm_start = time.perf_counter()
+                perf_logger.info(
+                    "[PERF] app.analyze_data_sync START  session=%s  query_len=%d",
+                    session_id, len(query),
+                )
                 result = analyze_data_sync(session_id, query)
-                
+                _t_llm = time.perf_counter() - _t_llm_start
+                perf_logger.info(
+                    "[PERF] app.analyze_data_sync END  session=%s  duration=%.3fs  status=%s",
+                    session_id, _t_llm,
+                    "success" if result.get("success") else "error",
+                )
+                _benchmark_warn("app.analyze_data_sync", _t_llm, session_id)
+                # ────────────────────────────────────────────────────────
+
                 if result.get("success"):
                     progress.progress(0.7, text="Updating session state")
 
-                    # Bust all app-level caches so the next render shows fresh data
+                    # ── PERF: cache invalidation (should be ~0 ms) ───────
+                    _t_cache_start = time.perf_counter()
                     on_data_changed()
-                    get_session_metadata_for_display.clear()
                     get_session_tables_for_display.clear()
                     get_full_table_dataframe.clear()
-                    _fetch_version_graph.clear()
+                    _t_cache = time.perf_counter() - _t_cache_start
+                    perf_logger.info(
+                        "[PERF] app.post_op.cache_clear  session=%s  duration=%.3fs",
+                        session_id, _t_cache,
+                    )
+                    _benchmark_warn("app.post_op.cache_clear", _t_cache, session_id)
+                    # ────────────────────────────────────────────────────
 
-                    # Create new version after successful operation
                     try:
-                        # Get current version from metadata
-                        current_metadata = get_session_metadata_for_display(session_id)
-                        current_vid = current_metadata.get("current_version", "v0") if current_metadata else "v0"
+                        _vkey = f"_version_graph_node_count_{session_id}"
+                        _n = int(st.session_state.get(_vkey, 0))
+                        new_vid = f"v{_n}"
 
-                        # Get graph to determine next version number
-                        try:
-                            graph_data = _fetch_version_graph(session_id)
-                            new_vid = f"v{len(graph_data.get('nodes', []))}"
-                        except Exception:
-                            new_vid = f"v_{str(uuid.uuid4())[:8]}"
-                        
-                        # Extract operation description from query (first 50 chars)
                         operation_desc = query[:50] + "..." if len(query) > 50 else query
-                        
-                        # Save new version
+
+                        # ── PERF: save_version HTTP POST ─────────────────
+                        _t_sv_start = time.perf_counter()
+                        perf_logger.info(
+                            "[PERF] app.post_op.save_version_http START  session=%s  version=%s",
+                            session_id, new_vid,
+                        )
                         save_version_response = requests.post(
                             f"{FASTAPI_URL}/api/session/{session_id}/save_version",
                             json={
@@ -1569,15 +1471,36 @@ def render_manipulation_tab():
                             },
                             timeout=HTTP_TIMEOUT_LONG,
                         )
-                        
+                        _t_sv = time.perf_counter() - _t_sv_start
+                        perf_logger.info(
+                            "[PERF] app.post_op.save_version_http END  session=%s  version=%s  "
+                            "status=%d  duration=%.3fs",
+                            session_id, new_vid, save_version_response.status_code, _t_sv,
+                        )
+                        _benchmark_warn("app.post_op.save_version_http", _t_sv, session_id)
+                        # ────────────────────────────────────────────────
+
                         if save_version_response.status_code == 200:
                             logger.info(f"Created version {new_vid} for session {session_id}")
+                            st.session_state[_vkey] = _n + 1
+                            _fetch_version_graph.clear()
+                            get_session_metadata_for_display.clear()
                         else:
                             logger.warning(f"Failed to save version {new_vid}: {save_version_response.text}")
                     except Exception as e:
                         logger.error(f"Error creating version: {e}")
-                        # Continue anyway - versioning failure shouldn't block the operation
-                    
+
+                    # ── PERF: full operation wall-clock summary ───────────
+                    _t_total = time.perf_counter() - _t_llm_start
+                    perf_logger.info(
+                        "[PERF] app.execute_query TOTAL  session=%s  "
+                        "llm=%.3fs  cache=%.3fs  save_version=%.3fs  wall=%.3fs",
+                        session_id, _t_llm, _t_cache,
+                        time.perf_counter() - _t_sv_start if '_t_sv_start' in dir() else 0.0,
+                        _t_total,
+                    )
+                    # ────────────────────────────────────────────────────
+
                     # Add to operation history with version ID
                     st.session_state.operation_history.append({
                         "timestamp": time.time(),
@@ -1586,18 +1509,18 @@ def render_manipulation_tab():
                         "response": result.get("response", ""),
                         "version_id": new_vid if 'new_vid' in locals() else None
                     })
-                    
+
                     progress.progress(1.0, text="Completed")
                     status.update(label="Operation completed", state="complete")
                     st.success("✅ Operation completed successfully!")
                     st.info("💡 Data has been updated. Scroll down to see the changes.")
-                    
+
                     # Show response
                     response_text = result.get("response", "")
                     if response_text:
                         with st.expander("📝 Operation Details", expanded=True):
                             st.markdown(response_text)
-                    
+
                     # Refresh the page to show updated data
                     st.rerun()
                 else:
@@ -1605,17 +1528,14 @@ def render_manipulation_tab():
                     status.update(label="Operation failed", state="error")
                     st.error(f"❌ Operation failed: {error_msg}")
                     st.info("💡 You can try again with a different query.")
-                    
+
             except Exception as e:
                 status.update(label="Operation failed", state="error")
                 st.error(f"❌ Unexpected error: {str(e)}")
                 st.exception(e)
     
-    st.divider()
-    
-    # Current Data Explorer
-    card_open("card-elevated")
-    st.markdown('<h2 class="section-title">📊 Current Data Explorer</h2>', unsafe_allow_html=True)
+    # ── DATA EXPLORER ────────────────────────────────────────────────────────
+    st.subheader("📊 Data")
     if tables and selected_table:
         full_df = get_full_table_dataframe(session_id, selected_table)
         if full_df is not None and not full_df.empty:
@@ -1637,7 +1557,6 @@ def render_manipulation_tab():
             )
         else:
             st.info("Full table data not available.")
-    card_close()
 
 
 def _render_sidebar_session_block():

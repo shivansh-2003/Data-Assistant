@@ -14,6 +14,25 @@ from .http_client import get_ingestion_client
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Perf logger
+# ---------------------------------------------------------------------------
+_perf_log = logging.getLogger("perf")
+
+try:
+    from perf_logger import BENCHMARKS as _BENCHMARKS
+except ImportError:
+    _BENCHMARKS = {}
+
+
+def _perf_warn(name: str, elapsed: float, session_id: str = "") -> None:
+    threshold = _BENCHMARKS.get(name)
+    if threshold and elapsed > threshold:
+        _perf_log.warning(
+            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1f× over)",
+            name, session_id, elapsed, threshold, elapsed / threshold,
+        )
+
 load_dotenv()
 
 # Feature Flags
@@ -69,6 +88,11 @@ def _get_session_state(session_id: str) -> Dict[str, pd.DataFrame]:
         Dictionary mapping table names to DataFrames
     """
     if session_id not in session_state:
+        _t0 = time.perf_counter()
+        _perf_log.info(
+            "[PERF] core.get_session_state START  session=%s  cache_miss=True",
+            session_id,
+        )
         # Try direct Redis access first (same process) - lazy check
         shared_store = _get_shared_store()
         if shared_store is not None:
@@ -77,7 +101,6 @@ def _get_session_state(session_id: str) -> Dict[str, pd.DataFrame]:
                 if tables is not None and len(tables) > 0:
                     session_state[session_id] = tables
                     logger.info(f"Loaded session {session_id} from Redis store with {len(tables)} tables")
-                    # Extend TTL on access
                     shared_store.extend_ttl(session_id)
                 else:
                     session_state[session_id] = {}
@@ -94,18 +117,30 @@ def _get_session_state(session_id: str) -> Dict[str, pd.DataFrame]:
                     session_state[session_id] = tables
                     logger.info(f"Loaded session {session_id} from HTTP API with {len(tables)} tables")
                 else:
-                    # Session doesn't exist in API, create empty state
                     session_state[session_id] = {}
                     logger.info(f"Created new empty session {session_id}")
             except Exception as e:
                 logger.error(f"Failed to load session {session_id} from HTTP API: {e}")
-                # Create empty state as fallback
                 session_state[session_id] = {}
         else:
-            # Create empty state if HTTP sync is disabled
             session_state[session_id] = {}
             logger.info(f"Created new empty session {session_id} (HTTP sync disabled)")
-    
+
+        _t_load = time.perf_counter() - _t0
+        _perf_log.info(
+            "[PERF] core.get_session_state END  session=%s  duration=%.3fs  "
+            "tables=%d  method=%s",
+            session_id, _t_load,
+            len(session_state.get(session_id, {})),
+            "redis_direct" if shared_store else ("http_api" if ENABLE_HTTP_SYNC else "empty"),
+        )
+        _perf_warn("core.get_session_state", _t_load, session_id)
+    else:
+        _perf_log.debug(
+            "[PERF] core.get_session_state  session=%s  cache_hit=True  tables=%d",
+            session_id, len(session_state[session_id]),
+        )
+
     return session_state[session_id]
 
 
@@ -124,22 +159,33 @@ def _save_session_state(session_id: str, table_name: str) -> bool:
         logger.warning(f"Session {session_id} not found in memory")
         return False
     
+    _t0 = time.perf_counter()
+    _perf_log.info(
+        "[PERF] core.save_session_state START  session=%s  table=%s",
+        session_id, table_name,
+    )
+
     # Try direct Redis access first (same process) - lazy check
     shared_store = _get_shared_store()
     if shared_store is not None:
         try:
             tables_dict = session_state[session_id]
-            # Get existing metadata or create new
             existing_metadata = shared_store.get_metadata(session_id) or {}
             metadata = {
                 **existing_metadata,
                 "last_operation": time.time(),
                 "last_table_modified": table_name,
                 "table_count": len(tables_dict),
-                "sync_method": "direct_redis"
+                "sync_method": "direct_redis",
             }
-            
             success = shared_store.save_session(session_id, tables_dict, metadata)
+            _t_elapsed = time.perf_counter() - _t0
+            _perf_log.info(
+                "[PERF] core.save_session_state END  session=%s  method=redis_direct  "
+                "duration=%.3fs  success=%s",
+                session_id, _t_elapsed, success,
+            )
+            _perf_warn("core.save_session_state", _t_elapsed, session_id)
             if success:
                 logger.info(f"Successfully saved session {session_id} to Redis store")
             else:
@@ -148,34 +194,35 @@ def _save_session_state(session_id: str, table_name: str) -> bool:
         except Exception as e:
             logger.error(f"Error saving session {session_id} to Redis store: {e}")
             return False
-    
+
     # Fall back to HTTP API (different process)
     if not ENABLE_HTTP_SYNC:
         logger.debug(f"HTTP sync disabled, skipping save for session {session_id}")
         return True
-    
+
     client = get_ingestion_client()
     try:
-        # Save all tables in the session
         tables_dict = session_state[session_id]
-        
-        # Prepare metadata
         metadata = {
             "last_operation": time.time(),
             "last_table_modified": table_name,
             "table_count": len(tables_dict),
-            "sync_method": "http_api"
+            "sync_method": "http_api",
         }
-        
         success = client.save_tables_to_api(session_id, tables_dict, metadata)
-        
+        _t_elapsed = time.perf_counter() - _t0
+        _perf_log.info(
+            "[PERF] core.save_session_state END  session=%s  method=http_api  "
+            "duration=%.3fs  success=%s",
+            session_id, _t_elapsed, success,
+        )
+        _perf_warn("core.save_session_state", _t_elapsed, session_id)
         if success:
             logger.info(f"Successfully saved session {session_id} via HTTP API")
         else:
             logger.error(f"Failed to save session {session_id} via HTTP API")
-        
         return success
-        
+
     except Exception as e:
         logger.error(f"Error saving session {session_id} via HTTP API: {e}")
         return False

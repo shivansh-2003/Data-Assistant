@@ -3,6 +3,7 @@
 import base64
 import json
 import logging
+import time as _time
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -21,6 +22,26 @@ from .session_store import BaseSessionStore
 from .store_common import append_lineage, json_loads_flexible, version_ids_from_key_names
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Perf logger — all [PERF] lines come through the "perf" logger.
+# Grep:  grep '\[PERF\]' logs.txt
+# ---------------------------------------------------------------------------
+_perf_log = logging.getLogger("perf")
+
+try:
+    from perf_logger import BENCHMARKS as _BENCHMARKS
+except ImportError:
+    _BENCHMARKS = {}
+
+
+def _perf_warn(name: str, elapsed: float, session_id: str = "") -> None:
+    threshold = _BENCHMARKS.get(name)
+    if threshold and elapsed > threshold:
+        _perf_log.warning(
+            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1f× over)",
+            name, session_id, elapsed, threshold, elapsed / threshold,
+        )
 
 
 class RedisStore(BaseSessionStore):
@@ -151,35 +172,66 @@ class RedisStore(BaseSessionStore):
         tables: Dict[str, pd.DataFrame],
         metadata: Dict,
     ) -> bool:
+        """
+        Benchmark: < 0.5 s total.
+        serialize < 0.15 s, redis SET < 0.30 s.
+        """
         if not self.is_connected():
             logger.error("Upstash Redis not connected")
             return False
+
+        _t0 = _time.perf_counter()
+        _perf_log.info(
+            "[PERF] redis.save_session START  session=%s  table_count=%d",
+            session_id, len(tables),
+        )
 
         try:
             key_tables = KEY_SESSION_TABLES.format(sid=session_id)
             key_meta = KEY_SESSION_META.format(sid=session_id)
             key_graph = KEY_SESSION_GRAPH.format(sid=session_id)
 
+            # ── serialize ─────────────────────────────────────────────────────
+            _t_ser = _time.perf_counter()
             tables_bytes = self.serializer.serialize(tables)
             tables_b64 = base64.b64encode(tables_bytes).decode("utf-8")
+            _t_ser_elapsed = _time.perf_counter() - _t_ser
+            payload_kb = len(tables_b64) / 1024
+            _perf_log.info(
+                "[PERF] redis.save_session.serialize  session=%s  duration=%.3fs  payload_kb=%.1f",
+                session_id, _t_ser_elapsed, payload_kb,
+            )
+            _perf_warn("redis.save_session.serialize", _t_ser_elapsed, session_id)
 
+            # ── Redis SET ─────────────────────────────────────────────────────
+            _t_set = _time.perf_counter()
             self.redis.setex(key_tables, self.session_ttl, tables_b64)
             self.redis.setex(key_meta, self.session_ttl, json.dumps(metadata, default=str))
             if not self.redis.exists(key_graph):
                 self.redis.setex(key_graph, self.session_ttl, json.dumps({"nodes": [], "edges": []}))
             else:
                 self.redis.expire(key_graph, self.session_ttl)
+            _t_set_elapsed = _time.perf_counter() - _t_set
+            _perf_log.info(
+                "[PERF] redis.save_session.redis_set  session=%s  duration=%.3fs",
+                session_id, _t_set_elapsed,
+            )
+            _perf_warn("redis.save_session.redis_set", _t_set_elapsed, session_id)
 
             try:
                 self._sync_version_ttls(session_id)
             except Exception as sync_e:
                 logger.warning("TTL sync for version keys skipped (session saved): %s", sync_e)
 
+            _t_total = _time.perf_counter() - _t0
+            _perf_log.info(
+                "[PERF] redis.save_session END  session=%s  serialize=%.3fs  redis_set=%.3fs  total=%.3fs",
+                session_id, _t_ser_elapsed, _t_set_elapsed, _t_total,
+            )
+            _perf_warn("redis.save_session", _t_total, session_id)
             logger.info(
                 "Saved session %s with %d tables (TTL: %ss)",
-                session_id,
-                len(tables),
-                self.session_ttl,
+                session_id, len(tables), self.session_ttl,
             )
             return True
 
@@ -188,18 +240,50 @@ class RedisStore(BaseSessionStore):
             return False
 
     def load_session(self, session_id: str) -> Optional[Dict[str, pd.DataFrame]]:
+        """
+        Benchmark: < 0.5 s total.
+        redis GET < 0.30 s, deserialize < 0.15 s.
+        """
         if not self.is_connected():
             return None
 
+        _t0 = _time.perf_counter()
+        _perf_log.info("[PERF] redis.load_session START  session=%s", session_id)
+
         try:
             key = KEY_SESSION_TABLES.format(sid=session_id)
+
+            # ── Redis GET ─────────────────────────────────────────────────────
+            _t_get = _time.perf_counter()
             data = self.redis.get(key)
+            _t_get_elapsed = _time.perf_counter() - _t_get
+            _perf_log.info(
+                "[PERF] redis.load_session.redis_get  session=%s  duration=%.3fs  found=%s",
+                session_id, _t_get_elapsed, data is not None,
+            )
+            _perf_warn("redis.load_session.redis_get", _t_get_elapsed, session_id)
 
             if data is None:
                 return None
 
+            # ── deserialize ───────────────────────────────────────────────────
+            _t_des = _time.perf_counter()
             tables_bytes = base64.b64decode(data)
-            return self.serializer.deserialize(tables_bytes)
+            result = self.serializer.deserialize(tables_bytes)
+            _t_des_elapsed = _time.perf_counter() - _t_des
+            _perf_log.info(
+                "[PERF] redis.load_session.deserialize  session=%s  duration=%.3fs  table_count=%d",
+                session_id, _t_des_elapsed, len(result) if result else 0,
+            )
+            _perf_warn("redis.load_session.deserialize", _t_des_elapsed, session_id)
+
+            _t_total = _time.perf_counter() - _t0
+            _perf_log.info(
+                "[PERF] redis.load_session END  session=%s  redis_get=%.3fs  deserialize=%.3fs  total=%.3fs",
+                session_id, _t_get_elapsed, _t_des_elapsed, _t_total,
+            )
+            _perf_warn("redis.load_session", _t_total, session_id)
+            return result
 
         except Exception as e:
             logger.error("Failed to load session %s: %s", session_id, e)
@@ -304,19 +388,40 @@ class RedisStore(BaseSessionStore):
         version_id: str,
         tables: Dict[str, pd.DataFrame],
     ) -> bool:
+        """
+        Fallback path when Redis COPY is unavailable.
+        Benchmark: < 0.5 s (same budget as save_session).
+        """
         if not self.is_connected():
             logger.error("Upstash Redis not connected")
             return False
 
+        _t0 = _time.perf_counter()
+        _perf_log.info(
+            "[PERF] redis.save_version START  session=%s  version=%s",
+            session_id, version_id,
+        )
         try:
             key = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
 
+            _t_ser = _time.perf_counter()
             tables_bytes = self.serializer.serialize(tables)
             tables_b64 = base64.b64encode(tables_bytes).decode("utf-8")
+            _t_ser_e = _time.perf_counter() - _t_ser
 
+            _t_set = _time.perf_counter()
             self.redis.setex(key, self.session_ttl, tables_b64)
+            _t_set_e = _time.perf_counter() - _t_set
+
             self.extend_ttl(session_id)
 
+            _t_total = _time.perf_counter() - _t0
+            _perf_log.info(
+                "[PERF] redis.save_version END  session=%s  version=%s  "
+                "serialize=%.3fs  redis_set=%.3fs  total=%.3fs",
+                session_id, version_id, _t_ser_e, _t_set_e, _t_total,
+            )
+            _perf_warn("redis.save_version", _t_total, session_id)
             logger.info("Saved version %s for session %s", version_id, session_id)
             return True
 
@@ -329,20 +434,46 @@ class RedisStore(BaseSessionStore):
         session_id: str,
         version_id: str,
     ) -> Optional[Dict[str, pd.DataFrame]]:
+        """
+        Fallback path when Redis COPY is unavailable.
+        Benchmark: < 0.5 s (same budget as load_session).
+        """
         if not self.is_connected():
             return None
 
+        _t0 = _time.perf_counter()
+        _perf_log.info(
+            "[PERF] redis.load_version START  session=%s  version=%s",
+            session_id, version_id,
+        )
         try:
             key = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
+
+            _t_get = _time.perf_counter()
             data = self.redis.get(key)
+            _t_get_e = _time.perf_counter() - _t_get
 
             if data is None:
+                _perf_log.info(
+                    "[PERF] redis.load_version END  session=%s  version=%s  not_found  total=%.3fs",
+                    session_id, version_id, _time.perf_counter() - _t0,
+                )
                 return None
 
+            _t_des = _time.perf_counter()
             tables_bytes = base64.b64decode(data)
             tables = self.serializer.deserialize(tables_bytes)
+            _t_des_e = _time.perf_counter() - _t_des
+
             self.extend_ttl(session_id)
 
+            _t_total = _time.perf_counter() - _t0
+            _perf_log.info(
+                "[PERF] redis.load_version END  session=%s  version=%s  "
+                "redis_get=%.3fs  deserialize=%.3fs  total=%.3fs",
+                session_id, version_id, _t_get_e, _t_des_e, _t_total,
+            )
+            _perf_warn("redis.load_version", _t_total, session_id)
             return tables
 
         except Exception as e:
@@ -400,20 +531,138 @@ class RedisStore(BaseSessionStore):
         operation: str,
         query: Optional[str] = None,
     ) -> bool:
+        """
+        Read-modify-write the version lineage graph via a pipelined SET+EXPIRE.
+        Benchmark: < 0.40 s (GET ~0.15 s + pipelined SET/EXPIRE ~0.20 s).
+        """
         if not self.is_connected():
             return False
 
+        _t0 = _time.perf_counter()
+        _perf_log.info(
+            "[PERF] redis.update_graph START  session=%s  new_vid=%s  parent=%s",
+            session_id, new_vid, parent_vid,
+        )
         try:
+            # ── GET graph ────────────────────────────────────────────────────
+            _t_get = _time.perf_counter()
             graph = self.get_graph(session_id)
+            _t_get_e = _time.perf_counter() - _t_get
+
             append_lineage(graph, parent_vid, new_vid, operation, query)
 
-            key = KEY_SESSION_GRAPH.format(sid=session_id)
-            self.redis.setex(key, self.session_ttl, json.dumps(graph, default=str))
-            self.extend_ttl(session_id)
+            # ── pipelined SET + EXPIRE ────────────────────────────────────────
+            key_graph  = KEY_SESSION_GRAPH.format(sid=session_id)
+            key_tables = KEY_SESSION_TABLES.format(sid=session_id)
+            key_meta   = KEY_SESSION_META.format(sid=session_id)
+            _t_set = _time.perf_counter()
+            pipe = self.redis.pipeline()
+            pipe.setex(key_graph, self.session_ttl, json.dumps(graph, default=str))
+            pipe.expire(key_tables, self.session_ttl)
+            pipe.expire(key_meta, self.session_ttl)
+            pipe.exec()
+            _t_set_e = _time.perf_counter() - _t_set
 
+            _t_total = _time.perf_counter() - _t0
+            _perf_log.info(
+                "[PERF] redis.update_graph END  session=%s  new_vid=%s  "
+                "get=%.3fs  pipeline_set=%.3fs  total=%.3fs  node_count=%d",
+                session_id, new_vid, _t_get_e, _t_set_e, _t_total,
+                len(graph.get("nodes", [])),
+            )
+            _perf_warn("redis.update_graph", _t_total, session_id)
             logger.info("Updated graph for %s: added %s", session_id, new_vid)
             return True
 
         except Exception as e:
             logger.error("Failed to update graph for %s: %s", session_id, e)
             return False
+
+    def snapshot_session_as_version(self, session_id: str, version_id: str) -> bool:
+        """
+        Server-side Redis COPY — benchmark: < 0.10 s.
+        Falls back to serialize/deserialize if COPY unavailable.
+        """
+        if not self.is_connected():
+            return False
+
+        src = KEY_SESSION_TABLES.format(sid=session_id)
+        dst = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
+
+        _t0 = _time.perf_counter()
+        _perf_log.info(
+            "[PERF] redis.snapshot_copy START  session=%s  version=%s  method=COPY",
+            session_id, version_id,
+        )
+        try:
+            if not self.redis.exists(src):
+                return False
+            ok = self.redis.copy(src, dst, replace=True)
+            if ok:
+                self.redis.expire(dst, self.session_ttl)
+                _t_elapsed = _time.perf_counter() - _t0
+                _perf_log.info(
+                    "[PERF] redis.snapshot_copy END  session=%s  version=%s  method=COPY  duration=%.3fs",
+                    session_id, version_id, _t_elapsed,
+                )
+                _perf_warn("redis.snapshot_copy", _t_elapsed, session_id)
+                return True
+        except Exception as e:
+            logger.warning("Redis COPY snapshot failed, using load/save fallback: %s", e)
+            _perf_log.warning(
+                "[PERF] redis.snapshot_copy FALLBACK  session=%s  version=%s  reason=%s",
+                session_id, version_id, e,
+            )
+
+        # Fallback: full serialize round-trip
+        tables = self.load_session(session_id)
+        if tables is None:
+            return False
+        return self.save_version(session_id, version_id, tables)
+
+    def restore_version_as_session(self, session_id: str, version_id: str) -> bool:
+        """
+        Server-side Redis COPY in reverse — benchmark: < 0.10 s.
+        Falls back to load_version + save_session if COPY unavailable.
+        """
+        if not self.is_connected():
+            return False
+
+        src = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
+        dst = KEY_SESSION_TABLES.format(sid=session_id)
+
+        _t0 = _time.perf_counter()
+        _perf_log.info(
+            "[PERF] redis.restore_copy START  session=%s  version=%s  method=COPY",
+            session_id, version_id,
+        )
+        try:
+            if not self.redis.exists(src):
+                _perf_log.info(
+                    "[PERF] redis.restore_copy END  session=%s  version=%s  not_found",
+                    session_id, version_id,
+                )
+                return False
+            ok = self.redis.copy(src, dst, replace=True)
+            if ok:
+                self.redis.expire(dst, self.session_ttl)
+                _t_elapsed = _time.perf_counter() - _t0
+                _perf_log.info(
+                    "[PERF] redis.restore_copy END  session=%s  version=%s  method=COPY  duration=%.3fs",
+                    session_id, version_id, _t_elapsed,
+                )
+                _perf_warn("redis.restore_copy", _t_elapsed, session_id)
+                return True
+        except Exception as e:
+            logger.warning("Redis COPY restore failed, using load/save fallback: %s", e)
+            _perf_log.warning(
+                "[PERF] redis.restore_copy FALLBACK  session=%s  version=%s  reason=%s",
+                session_id, version_id, e,
+            )
+
+        # Fallback: full serialize round-trip
+        tables = self.load_version(session_id, version_id)
+        if tables is None:
+            return False
+        meta = self.get_metadata(session_id) or {}
+        return self.save_session(session_id, tables, meta)
