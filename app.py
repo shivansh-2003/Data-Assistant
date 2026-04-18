@@ -23,29 +23,36 @@ import graphviz
 import base64
 import pickle
 from datetime import datetime
+from log_setup import setup_logging
+setup_logging()
+
 from data_visualization import render_visualization_tab
 from data_visualization.cache_invalidation import on_data_changed
 from chatbot.streamlit_ui import render_chatbot_tab
 from components.data_table import render_advanced_table
 from components.empty_state import render_empty_state
 from observability.langfuse_client import update_trace_context
-from perf_logger import BENCHMARKS as _BENCHMARKS
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Shared perf logger — one named logger keeps it easy to grep / filter
+# Per-operation latency ceilings (seconds).  Exceeded → WARNING in logs.
 # ---------------------------------------------------------------------------
-import logging as _logging
-perf_logger = _logging.getLogger("perf")
+_BENCHMARKS: dict[str, float] = {
+    "app.analyze_data_sync":        15.0,
+    "app.analyze_data_sync.llm":    12.0,
+    "app.post_op.cache_clear":       0.05,
+    "app.post_op.save_version_http": 1.50,
+    "app.branch_http":               1.00,
+}
 
 
-def _benchmark_warn(name: str, elapsed: float, session_id: str = "") -> None:
+def _perf_warn(name: str, elapsed: float, session_id: str = "") -> None:
     """Emit a SLOW warning if elapsed exceeds the benchmark ceiling."""
     threshold = _BENCHMARKS.get(name)
     if threshold and elapsed > threshold:
-        perf_logger.warning(
-            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1f× over)",
+        logger.warning(
+            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1fx over)",
             name, session_id, elapsed, threshold, elapsed / threshold,
         )
 
@@ -600,11 +607,10 @@ def analyze_data_sync(session_id: str, query: str) -> Dict[str, Any]:
     Returns:
         Dict with 'success', 'response', and optional 'error' keys
     """
-    import time as _time
-    from perf_logger import perf_logger as _pl
+    import time as _t
 
-    t0 = _time.perf_counter()
-    _pl.info(
+    t0 = _t.perf_counter()
+    logger.info(
         "[PERF] app.analyze_data_sync START  session=%s  query_len=%d",
         session_id, len(query),
     )
@@ -614,19 +620,20 @@ def analyze_data_sync(session_id: str, query: str) -> Dict[str, Any]:
 
         # Run async function in sync context
         response = asyncio.run(analyze_data(session_id, query))
-        elapsed = _time.perf_counter() - t0
-        _pl.info(
+        elapsed = _t.perf_counter() - t0
+        logger.info(
             "[PERF] app.analyze_data_sync END  session=%s  duration=%.3fs  status=success",
             session_id, elapsed,
         )
-        _benchmark_warn("app.analyze_data_sync", elapsed, session_id)
+        _perf_warn("app.analyze_data_sync", elapsed, session_id)
         return {"success": True, "response": response}
     except Exception as e:
-        elapsed = _time.perf_counter() - t0
-        _pl.info(
+        elapsed = _t.perf_counter() - t0
+        logger.error(
             "[PERF] app.analyze_data_sync END  session=%s  duration=%.3fs  status=error  error=%s",
             session_id, elapsed, type(e).__name__,
         )
+        logger.debug("analyze_data_sync traceback:", exc_info=True)
         return {"success": False, "error": str(e)}
 
 
@@ -1116,7 +1123,7 @@ def render_manipulation_tab():
     # ── helper: one-shot branch call (shared by all branch buttons) ──────────
     def _do_branch(target_vid: str) -> None:
         _tb0 = time.perf_counter()
-        perf_logger.info(
+        logger.info(
             "[PERF] app.branch_http START  session=%s  target_version=%s",
             session_id, target_vid,
         )
@@ -1127,7 +1134,7 @@ def render_manipulation_tab():
                 timeout=HTTP_TIMEOUT_LONG,
             )
             _tb = time.perf_counter() - _tb0
-            perf_logger.info(
+            logger.info(
                 "[PERF] app.branch_http END  session=%s  target_version=%s  "
                 "status=%d  duration=%.3fs",
                 session_id, target_vid, r.status_code, _tb,
@@ -1419,13 +1426,13 @@ def render_manipulation_tab():
 
                 # ── PERF: LLM + MCP tool calls ──────────────────────────
                 _t_llm_start = time.perf_counter()
-                perf_logger.info(
+                logger.info(
                     "[PERF] app.analyze_data_sync START  session=%s  query_len=%d",
                     session_id, len(query),
                 )
                 result = analyze_data_sync(session_id, query)
                 _t_llm = time.perf_counter() - _t_llm_start
-                perf_logger.info(
+                logger.info(
                     "[PERF] app.analyze_data_sync END  session=%s  duration=%.3fs  status=%s",
                     session_id, _t_llm,
                     "success" if result.get("success") else "error",
@@ -1442,7 +1449,7 @@ def render_manipulation_tab():
                     get_session_tables_for_display.clear()
                     get_full_table_dataframe.clear()
                     _t_cache = time.perf_counter() - _t_cache_start
-                    perf_logger.info(
+                    logger.info(
                         "[PERF] app.post_op.cache_clear  session=%s  duration=%.3fs",
                         session_id, _t_cache,
                     )
@@ -1458,7 +1465,7 @@ def render_manipulation_tab():
 
                         # ── PERF: save_version HTTP POST ─────────────────
                         _t_sv_start = time.perf_counter()
-                        perf_logger.info(
+                        logger.info(
                             "[PERF] app.post_op.save_version_http START  session=%s  version=%s",
                             session_id, new_vid,
                         )
@@ -1472,7 +1479,7 @@ def render_manipulation_tab():
                             timeout=HTTP_TIMEOUT_LONG,
                         )
                         _t_sv = time.perf_counter() - _t_sv_start
-                        perf_logger.info(
+                        logger.info(
                             "[PERF] app.post_op.save_version_http END  session=%s  version=%s  "
                             "status=%d  duration=%.3fs",
                             session_id, new_vid, save_version_response.status_code, _t_sv,
@@ -1492,7 +1499,7 @@ def render_manipulation_tab():
 
                     # ── PERF: full operation wall-clock summary ───────────
                     _t_total = time.perf_counter() - _t_llm_start
-                    perf_logger.info(
+                    logger.info(
                         "[PERF] app.execute_query TOTAL  session=%s  "
                         "llm=%.3fs  cache=%.3fs  save_version=%.3fs  wall=%.3fs",
                         session_id, _t_llm, _t_cache,

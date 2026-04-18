@@ -15,21 +15,23 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Perf logger
+# Per-operation latency ceilings (seconds).  Exceeded → WARNING in logs.
 # ---------------------------------------------------------------------------
-_perf_log = logging.getLogger("perf")
-
-try:
-    from perf_logger import BENCHMARKS as _BENCHMARKS
-except ImportError:
-    _BENCHMARKS = {}
+_BENCHMARKS: dict[str, float] = {
+    "http.load_tables":             1.00,
+    "http.load_tables.http":        0.60,
+    "http.load_tables.deserialize": 0.20,
+    "http.save_tables":             1.20,
+    "http.save_tables.serialize":   0.20,
+    "http.save_tables.http":        0.80,
+}
 
 
 def _perf_warn(name: str, elapsed: float, session_id: str = "") -> None:
     threshold = _BENCHMARKS.get(name)
     if threshold and elapsed > threshold:
-        _perf_log.warning(
-            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1f× over)",
+        logger.warning(
+            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1fx over)",
             name, session_id, elapsed, threshold, elapsed / threshold,
         )
 
@@ -107,7 +109,7 @@ class IngestionAPIClient:
             Dictionary mapping table names to DataFrames, or None if session not found
         """
         _t0 = _time.perf_counter()
-        _perf_log.info(
+        logger.info(
             "[PERF] http.load_tables START  session=%s  url=%s/api/session/%s/tables",
             session_id, self.base_url, session_id,
         )
@@ -119,7 +121,7 @@ class IngestionAPIClient:
             _t_http = _time.perf_counter()
             response = self.session.get(url, params=params, timeout=self.timeout)
             _t_http_e = _time.perf_counter() - _t_http
-            _perf_log.info(
+            logger.info(
                 "[PERF] http.load_tables.http  session=%s  status=%d  duration=%.3fs  "
                 "response_kb=%.1f",
                 session_id, response.status_code, _t_http_e,
@@ -158,14 +160,14 @@ class IngestionAPIClient:
                         logger.error(f"Failed to deserialize table '{table_name}': {e}")
                         raise
             _t_des_e = _time.perf_counter() - _t_des
-            _perf_log.info(
+            logger.info(
                 "[PERF] http.load_tables.deserialize  session=%s  duration=%.3fs  table_count=%d",
                 session_id, _t_des_e, len(tables_dict),
             )
             _perf_warn("http.load_tables.deserialize", _t_des_e, session_id)
 
             _t_total = _time.perf_counter() - _t0
-            _perf_log.info(
+            logger.info(
                 "[PERF] http.load_tables END  session=%s  http=%.3fs  deserialize=%.3fs  total=%.3fs",
                 session_id, _t_http_e, _t_des_e, _t_total,
             )
@@ -199,7 +201,7 @@ class IngestionAPIClient:
             True if successful, False otherwise
         """
         _t0 = _time.perf_counter()
-        _perf_log.info(
+        logger.info(
             "[PERF] http.save_tables START  session=%s  table_count=%d",
             session_id, len(tables_dict),
         )
@@ -222,7 +224,7 @@ class IngestionAPIClient:
             payload = {"tables": tables_data, "metadata": metadata or {}}
             payload_kb = sum(len(v["data"]) for v in tables_data.values()) / 1024
             _t_ser_e = _time.perf_counter() - _t_ser
-            _perf_log.info(
+            logger.info(
                 "[PERF] http.save_tables.serialize  session=%s  duration=%.3fs  payload_kb=%.1f",
                 session_id, _t_ser_e, payload_kb,
             )
@@ -233,7 +235,7 @@ class IngestionAPIClient:
             _t_http = _time.perf_counter()
             response = self.session.put(url, json=payload, timeout=self.timeout)
             _t_http_e = _time.perf_counter() - _t_http
-            _perf_log.info(
+            logger.info(
                 "[PERF] http.save_tables.http  session=%s  status=%d  duration=%.3fs",
                 session_id, response.status_code, _t_http_e,
             )
@@ -244,7 +246,7 @@ class IngestionAPIClient:
             success = result.get("success", False)
             
             _t_total = _time.perf_counter() - _t0
-            _perf_log.info(
+            logger.info(
                 "[PERF] http.save_tables END  session=%s  serialize=%.3fs  http=%.3fs  total=%.3fs  success=%s",
                 session_id, _t_ser_e, _t_http_e, _t_total, success,
             )

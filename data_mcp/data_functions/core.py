@@ -15,21 +15,19 @@ from .http_client import get_ingestion_client
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Perf logger
+# Per-operation latency ceilings (seconds).  Exceeded → WARNING in logs.
 # ---------------------------------------------------------------------------
-_perf_log = logging.getLogger("perf")
-
-try:
-    from perf_logger import BENCHMARKS as _BENCHMARKS
-except ImportError:
-    _BENCHMARKS = {}
+_BENCHMARKS: dict[str, float] = {
+    "core.get_session_state":  1.00,
+    "core.save_session_state": 1.20,
+}
 
 
 def _perf_warn(name: str, elapsed: float, session_id: str = "") -> None:
     threshold = _BENCHMARKS.get(name)
     if threshold and elapsed > threshold:
-        _perf_log.warning(
-            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1f× over)",
+        logger.warning(
+            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1fx over)",
             name, session_id, elapsed, threshold, elapsed / threshold,
         )
 
@@ -89,7 +87,7 @@ def _get_session_state(session_id: str) -> Dict[str, pd.DataFrame]:
     """
     if session_id not in session_state:
         _t0 = time.perf_counter()
-        _perf_log.info(
+        logger.info(
             "[PERF] core.get_session_state START  session=%s  cache_miss=True",
             session_id,
         )
@@ -127,7 +125,7 @@ def _get_session_state(session_id: str) -> Dict[str, pd.DataFrame]:
             logger.info(f"Created new empty session {session_id} (HTTP sync disabled)")
 
         _t_load = time.perf_counter() - _t0
-        _perf_log.info(
+        logger.info(
             "[PERF] core.get_session_state END  session=%s  duration=%.3fs  "
             "tables=%d  method=%s",
             session_id, _t_load,
@@ -136,7 +134,7 @@ def _get_session_state(session_id: str) -> Dict[str, pd.DataFrame]:
         )
         _perf_warn("core.get_session_state", _t_load, session_id)
     else:
-        _perf_log.debug(
+        logger.debug(
             "[PERF] core.get_session_state  session=%s  cache_hit=True  tables=%d",
             session_id, len(session_state[session_id]),
         )
@@ -160,7 +158,7 @@ def _save_session_state(session_id: str, table_name: str) -> bool:
         return False
     
     _t0 = time.perf_counter()
-    _perf_log.info(
+    logger.info(
         "[PERF] core.save_session_state START  session=%s  table=%s",
         session_id, table_name,
     )
@@ -180,7 +178,7 @@ def _save_session_state(session_id: str, table_name: str) -> bool:
             }
             success = shared_store.save_session(session_id, tables_dict, metadata)
             _t_elapsed = time.perf_counter() - _t0
-            _perf_log.info(
+            logger.info(
                 "[PERF] core.save_session_state END  session=%s  method=redis_direct  "
                 "duration=%.3fs  success=%s",
                 session_id, _t_elapsed, success,
@@ -211,7 +209,7 @@ def _save_session_state(session_id: str, table_name: str) -> bool:
         }
         success = client.save_tables_to_api(session_id, tables_dict, metadata)
         _t_elapsed = time.perf_counter() - _t0
-        _perf_log.info(
+        logger.info(
             "[PERF] core.save_session_state END  session=%s  method=http_api  "
             "duration=%.3fs  success=%s",
             session_id, _t_elapsed, success,

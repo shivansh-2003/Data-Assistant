@@ -24,6 +24,9 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
+from log_setup import setup_logging
+setup_logging()
+
 import pandas as pd
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
@@ -51,29 +54,25 @@ import data_mcp.prompt_workflows  # noqa: F401 — registers @mcp.prompt
 # =============================================================================
 # Logging
 # =============================================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Perf logger — all timing lines use the "perf" logger so they can be
-# grep'd with:  grep '\[PERF\]' <logfile>
+# Per-operation latency ceilings (seconds).  Exceeded → WARNING in logs.
 # ---------------------------------------------------------------------------
-_perf_log = logging.getLogger("perf")
-
-try:
-    from perf_logger import BENCHMARKS as _BENCHMARKS
-except ImportError:
-    _BENCHMARKS = {}
+_BENCHMARKS: dict[str, float] = {
+    "api.save_version":              1.00,
+    "api.save_version.snapshot":     0.30,
+    "api.save_version.update_graph": 0.50,
+    "api.branch":                    0.50,
+    "api.branch.restore":            0.30,
+}
 
 
 def _perf_warn(name: str, elapsed: float, session_id: str = "") -> None:
     threshold = _BENCHMARKS.get(name)
     if threshold and elapsed > threshold:
-        _perf_log.warning(
-            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1f× over)",
+        logger.warning(
+            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1fx over)",
             name, session_id, elapsed, threshold, elapsed / threshold,
         )
 
@@ -578,7 +577,7 @@ async def create_branch(session_id: str, request_data: Dict[str, Any]):
         raise HTTPException(status_code=400, detail="version_id is required")
 
     _t0 = time.perf_counter()
-    _perf_log.info(
+    logger.info(
         "[PERF] api.branch START  session=%s  target_version=%s",
         session_id, version_id,
     )
@@ -587,7 +586,7 @@ async def create_branch(session_id: str, request_data: Dict[str, Any]):
     _t_restore = time.perf_counter()
     ok = store.restore_version_as_session(session_id, version_id)
     _t_restore_elapsed = time.perf_counter() - _t_restore
-    _perf_log.info(
+    logger.info(
         "[PERF] api.branch.restore  session=%s  version=%s  duration=%.3fs  ok=%s",
         session_id, version_id, _t_restore_elapsed, ok,
     )
@@ -600,7 +599,7 @@ async def create_branch(session_id: str, request_data: Dict[str, Any]):
     store.extend_ttl(session_id)
 
     _t_total = time.perf_counter() - _t0
-    _perf_log.info(
+    logger.info(
         "[PERF] api.branch END  session=%s  version=%s  restore=%.3fs  total=%.3fs",
         session_id, version_id, _t_restore_elapsed, _t_total,
     )
@@ -631,7 +630,7 @@ async def save_version_endpoint(session_id: str, request_data: Dict[str, Any]):
         raise HTTPException(status_code=400, detail="version_id is required")
 
     _t0 = time.perf_counter()
-    _perf_log.info(
+    logger.info(
         "[PERF] api.save_version START  session=%s  version=%s",
         session_id, version_id,
     )
@@ -642,7 +641,7 @@ async def save_version_endpoint(session_id: str, request_data: Dict[str, Any]):
     _t_snap = time.perf_counter()
     snap_ok = store.snapshot_session_as_version(session_id, version_id)
     _t_snap_elapsed = time.perf_counter() - _t_snap
-    _perf_log.info(
+    logger.info(
         "[PERF] api.save_version.snapshot  session=%s  version=%s  duration=%.3fs  ok=%s",
         session_id, version_id, _t_snap_elapsed, snap_ok,
     )
@@ -656,7 +655,7 @@ async def save_version_endpoint(session_id: str, request_data: Dict[str, Any]):
             operation=operation, query=query,
         )
         _t_graph_elapsed = time.perf_counter() - _t_graph
-        _perf_log.info(
+        logger.info(
             "[PERF] api.save_version.update_graph  session=%s  version=%s  duration=%.3fs",
             session_id, version_id, _t_graph_elapsed,
         )
@@ -666,7 +665,7 @@ async def save_version_endpoint(session_id: str, request_data: Dict[str, Any]):
         store.extend_ttl(session_id)
 
         _t_total = time.perf_counter() - _t0
-        _perf_log.info(
+        logger.info(
             "[PERF] api.save_version END  session=%s  version=%s  "
             "snapshot=%.3fs  graph=%.3fs  total=%.3fs",
             session_id, version_id, _t_snap_elapsed, _t_graph_elapsed, _t_total,

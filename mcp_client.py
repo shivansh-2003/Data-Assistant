@@ -5,9 +5,9 @@ Connects to the Data Assistant MCP Server and uses OpenAI GPT-5.1 for data manip
 
 import os
 import asyncio
+import logging
 import threading
 import time as _time
-import logging as _logging
 import httpx
 from typing import Optional, List, Dict, Any, Tuple
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -15,17 +15,25 @@ from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langchain_core.callbacks import BaseCallbackHandler
 from langfuse import observe
-from perf_logger import BENCHMARKS as _BENCHMARKS
 
-_perf_log = _logging.getLogger("perf")
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Per-operation latency ceilings (seconds).  Exceeded → WARNING in logs.
+# ---------------------------------------------------------------------------
+_BENCHMARKS: dict[str, float] = {
+    "mcp.agent_create":  2.00,
+    "mcp.tool_fetch":    0.80,
+    "mcp.llm_invoke":   12.00,
+}
 
 
 def _perf_warn(name: str, elapsed: float, sid: str = "") -> None:
     """Emit SLOW warning if elapsed exceeds benchmark threshold."""
     threshold = _BENCHMARKS.get(name)
     if threshold and elapsed > threshold:
-        _perf_log.warning(
-            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1f× over)",
+        logger.warning(
+            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1fx over)",
             name, sid, elapsed, threshold, elapsed / threshold,
         )
 
@@ -108,24 +116,17 @@ class ToolUsageCallback(BaseCallbackHandler):
         else:
             tool_name = getattr(serialized, "name", "Unknown")
         
-        print(f"\n🔧 [TOOL CALL] {tool_name}")
-        if input_str:
-            # Show truncated input
-            input_preview = str(input_str)[:100] + "..." if len(str(input_str)) > 100 else str(input_str)
-            print(f"   Input: {input_preview}")
+        logger.info("[TOOL] call  name=%s  input=%.100s", tool_name, str(input_str) if input_str else "")
         self.tool_calls.append({"name": tool_name, "input": input_str})
     
     def on_tool_end(self, output, **kwargs):
         """Called when a tool finishes executing."""
-        # Show truncated output
-        output_str = str(output)[:200] + "..." if len(str(output)) > 200 else str(output)
-        print(f"   ✅ Tool execution completed")
-        if output_str and len(str(output)) < 500:
-            print(f"   Output preview: {output_str}")
+        output_str = str(output)[:200]
+        logger.debug("[TOOL] done  output_preview=%.200s", output_str)
     
     def on_tool_error(self, error, **kwargs):
         """Called when a tool encounters an error."""
-        print(f"   ❌ Tool error: {error}")
+        logger.error("[TOOL] error  %s", error)
     
     def get_tool_summary(self):
         """Get a summary of all tools called."""
@@ -156,7 +157,7 @@ async def create_mcp_agent():
         )
 
     _t_agent_start = _time.perf_counter()
-    _perf_log.info("[PERF] mcp.agent_create START  model=%s", OPENAI_MODEL)
+    logger.info("[PERF] mcp.agent_create START  model=%s", OPENAI_MODEL)
 
     # ── MCP client init ──────────────────────────────────────────────────────
     _t_mcp = _time.perf_counter()
@@ -171,27 +172,18 @@ async def create_mcp_agent():
 
     # ── Tool discovery ───────────────────────────────────────────────────────
     _t_tools = _time.perf_counter()
-    _perf_log.info("[PERF] mcp.tool_fetch START  server=%s", MCP_SERVER_URL)
-    print("Loading tools from MCP server...")
+    logger.info("[PERF] mcp.tool_fetch START  server=%s", MCP_SERVER_URL)
+    logger.info("[MCP] Loading tools from server  url=%s", MCP_SERVER_URL)
     tools = await client.get_tools()
     _t_tools_elapsed = _time.perf_counter() - _t_tools
-    _perf_log.info(
+    logger.info(
         "[PERF] mcp.tool_fetch END  tool_count=%d  duration=%.3fs",
         len(tools), _t_tools_elapsed,
     )
     _perf_warn("mcp.tool_fetch", _t_tools_elapsed)
 
-    print(f"\n✅ Loaded {len(tools)} tools from MCP server:")
-    print("-" * 60)
-    for idx, tool in enumerate(tools, 1):
-        tool_name = getattr(tool, 'name', 'Unknown')
-        tool_desc = getattr(tool, 'description', 'No description')
-        print(f"  {idx}. {tool_name}")
-        if tool_desc:
-            desc = tool_desc[:80] + "..." if len(tool_desc) > 80 else tool_desc
-            print(f"     └─ {desc}")
-    print("-" * 60)
-    print()
+    tool_names = [getattr(t, "name", "?") for t in tools]
+    logger.info("[MCP] Loaded %d tools: %s", len(tools), tool_names)
 
     # ── LLM init ─────────────────────────────────────────────────────────────
     _t_llm_init = _time.perf_counter()
@@ -200,7 +192,7 @@ async def create_mcp_agent():
         api_key=OPENAI_API_KEY,
         temperature=0.1,
     )
-    _perf_log.info(
+    logger.info(
         "[PERF] mcp.llm_init  model=%s  duration=%.3fs",
         OPENAI_MODEL, _time.perf_counter() - _t_llm_init,
     )
@@ -209,7 +201,7 @@ async def create_mcp_agent():
     agent = create_agent(llm, tools)
 
     _t_agent_elapsed = _time.perf_counter() - _t_agent_start
-    _perf_log.info(
+    logger.info(
         "[PERF] mcp.agent_create END  tool_fetch=%.3fs  total=%.3fs",
         _t_tools_elapsed, _t_agent_elapsed,
     )
@@ -232,10 +224,10 @@ async def get_available_sessions() -> List[Dict[str, Any]]:
             data = response.json()
             return data.get("sessions", [])
     except httpx.HTTPError as e:
-        print(f"Error fetching sessions: {e}")
+        logger.error("HTTP error fetching sessions: %s", e)
         return []
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        logger.error("Unexpected error fetching sessions: %s", e)
         return []
 
 
@@ -260,7 +252,7 @@ async def get_session_metadata(session_id: str) -> Optional[Dict[str, Any]]:
             return None
         raise
     except Exception as e:
-        print(f"Error fetching session metadata: {e}")
+        logger.error("Error fetching session metadata  session=%s  error=%s", session_id, e)
         return None
 
 
@@ -313,11 +305,11 @@ async def analyze_data(session_id: str, query: str) -> str:
 
     # ── PERF: LLM agent invoke (the long pole in the tent) ───────────────────
     _t_invoke_start = _time.perf_counter()
-    _perf_log.info(
+    logger.info(
         "[PERF] mcp.llm_invoke START  session=%s  model=%s  query_len=%d",
         session_id, OPENAI_MODEL, len(query),
     )
-    print("\nStarting analysis...")
+    logger.info("[MCP] Starting LLM agent invoke  session=%s", session_id)
     response = await agent.ainvoke(
         {
             "messages": [
@@ -328,86 +320,63 @@ async def analyze_data(session_id: str, query: str) -> str:
         config={"callbacks": callbacks},
     )
     _t_invoke = _time.perf_counter() - _t_invoke_start
-    _perf_log.info(
+    logger.info(
         "[PERF] mcp.llm_invoke END  session=%s  duration=%.3fs  tool_calls=%d",
         session_id, _t_invoke, len(tool_callback.tool_calls),
     )
     _perf_warn("mcp.llm_invoke", _t_invoke, session_id)
     # ──────────────────────────────────────────────────────────────────────────
 
-    print(tool_callback.get_tool_summary())
+    logger.info("[MCP] Analysis done  session=%s  tool_calls=%d", session_id, len(tool_callback.tool_calls))
     return response["messages"][-1].content
 
 
 async def interactive_chat():
-    """
-    Interactive chat interface for data analysis.
-    """
-    print("=" * 60)
-    print("Data Assistant MCP Client - Interactive Mode")
-    print("=" * 60)
-    print(f"MCP Server: {MCP_SERVER_URL}")
-    print(f"Model: {OPENAI_MODEL}")
-    print("=" * 60)
-    print()
-    
+    """Interactive CLI chat interface for data analysis."""
+    logger.info("MCP interactive mode  server=%s  model=%s", MCP_SERVER_URL, OPENAI_MODEL)
     agent, _client = await _get_or_create_agent()
-    
-    # Get available sessions and show them to user
-    print("Fetching available sessions...")
+
+    logger.info("Fetching available sessions...")
     sessions = await get_available_sessions()
-    
+
     if sessions:
-        print(f"\nAvailable sessions ({len(sessions)}):")
-        for idx, session in enumerate(sessions[:10], 1):  # Show first 10
-            session_id = session.get("session_id", "N/A")
-            file_name = session.get("file_name", "Unknown")
-            table_count = session.get("table_count", 0)
-            print(f"  {idx}. {session_id} - {file_name} ({table_count} tables)")
+        logger.info("Available sessions (%d):", len(sessions))
+        for idx, session in enumerate(sessions[:10], 1):
+            logger.info(
+                "  %d. %s  file=%s  tables=%d",
+                idx,
+                session.get("session_id", "N/A"),
+                session.get("file_name", "Unknown"),
+                session.get("table_count", 0),
+            )
         if len(sessions) > 10:
-            print(f"  ... and {len(sessions) - 10} more sessions")
-        print()
-    
-    # Get session ID from user
-    session_id = input("Enter session ID (or press Enter to list all): ").strip()
-    if not session_id:
-        if sessions:
-            print("\nAll available sessions:")
-            for session in sessions:
-                session_id_val = session.get("session_id", "N/A")
-                file_name = session.get("file_name", "Unknown")
-                table_count = session.get("table_count", 0)
-                print(f"  - {session_id_val}: {file_name} ({table_count} tables)")
-        else:
-            print("No sessions found. Upload a file via the ingestion API first.")
+            logger.info("  ... and %d more sessions", len(sessions) - 10)
+    else:
+        logger.warning("No sessions found — upload a file via the ingestion API first.")
         return
-    
-    print(f"\nSession ID: {session_id}")
-    print("Type 'exit' or 'quit' to end the session\n")
-    
+
+    session_id = input("Enter session ID: ").strip()
+    if not session_id:
+        return
+
+    logger.info("Session: %s  (type 'exit' to quit)", session_id)
+
     while True:
         query = input("You: ").strip()
-        
         if query.lower() in ["exit", "quit", "q"]:
-            print("Goodbye!")
+            logger.info("Interactive session ended.")
             break
-        
         if not query:
             continue
-        
-        # Initialize table first if needed
-        init_message = f"""
-        Session ID: {session_id}
-        
-        User Query: {query}
-        
-        Please help me with this data analysis task. First, initialize the table from the session 
-        using initialize_data_table, then perform the requested operations.
-        """
-        
-        print("\n🤔 Thinking...")
+
+        init_message = (
+            f"Session ID: {session_id}\n\nUser Query: {query}\n\n"
+            "Please help with this task. First initialize the table from the session "
+            "using initialize_data_table, then perform the requested operations."
+        )
+
+        logger.info("[MCP] Processing query  session=%s  query=%.80s", session_id, query)
         try:
-            # Create callbacks to track tool usage + Langfuse tracing
             tool_callback = ToolUsageCallback()
             update_trace_context(session_id=session_id, metadata={"source": "mcp_client_interactive"})
             langfuse_callback = build_langchain_callback(
@@ -418,44 +387,37 @@ async def interactive_chat():
             callbacks = [tool_callback]
             if langfuse_callback:
                 callbacks.append(langfuse_callback)
-            
+
             response = await agent.ainvoke(
                 {
                     "messages": [
                         {"role": "system", "content": AGENT_SYSTEM_MESSAGE},
-                        {"role": "user", "content": init_message}
+                        {"role": "user", "content": init_message},
                     ]
                 },
-                config={"callbacks": callbacks}
+                config={"callbacks": callbacks},
             )
-            
-            # Show tool usage summary
-            print(tool_callback.get_tool_summary())
-            
+
+            logger.info("[MCP] Response ready  tool_calls=%d", len(tool_callback.tool_calls))
             answer = response["messages"][-1].content
-            print(f"\n🤖 Assistant: {answer}\n")
+            print(f"\nAssistant: {answer}\n")
         except Exception as e:
-            print(f"\n❌ Error: {e}\n")
-    
+            logger.error("[MCP] Query failed  error=%s", e, exc_info=True)
+
 
 def main():
     """Main entry point."""
     import sys
-    
+
     if len(sys.argv) > 1:
-        # Command-line mode: analyze_data(session_id, query)
         if len(sys.argv) < 3:
             print("Usage: python mcp_client.py <session_id> <query>")
-            print("   or: python mcp_client.py  # for interactive mode")
             sys.exit(1)
-        
         session_id = sys.argv[1]
         query = " ".join(sys.argv[2:])
-        
         result = asyncio.run(analyze_data(session_id, query))
         print(result)
     else:
-        # Interactive mode
         asyncio.run(interactive_chat())
 
 

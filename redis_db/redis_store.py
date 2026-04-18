@@ -24,22 +24,29 @@ from .store_common import append_lineage, json_loads_flexible, version_ids_from_
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Perf logger — all [PERF] lines come through the "perf" logger.
-# Grep:  grep '\[PERF\]' logs.txt
+# Per-operation latency ceilings (seconds).  Exceeded → WARNING in logs.
 # ---------------------------------------------------------------------------
-_perf_log = logging.getLogger("perf")
-
-try:
-    from perf_logger import BENCHMARKS as _BENCHMARKS
-except ImportError:
-    _BENCHMARKS = {}
+_BENCHMARKS: dict[str, float] = {
+    "redis.save_session":             0.50,
+    "redis.save_session.serialize":   0.15,
+    "redis.save_session.redis_set":   0.30,
+    "redis.load_session":             0.50,
+    "redis.load_session.redis_get":   0.30,
+    "redis.load_session.deserialize": 0.15,
+    "redis.save_version":             0.50,
+    "redis.load_version":             0.50,
+    "redis.snapshot_copy":            0.10,
+    "redis.restore_copy":             0.10,
+    "redis.update_graph":             0.40,
+    "redis.extend_ttl":               0.20,
+}
 
 
 def _perf_warn(name: str, elapsed: float, session_id: str = "") -> None:
     threshold = _BENCHMARKS.get(name)
     if threshold and elapsed > threshold:
-        _perf_log.warning(
-            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1f× over)",
+        logger.warning(
+            "[PERF][SLOW] %-40s  session=%s  %.3fs elapsed  (benchmark: %.3fs  |  %.1fx over)",
             name, session_id, elapsed, threshold, elapsed / threshold,
         )
 
@@ -181,7 +188,7 @@ class RedisStore(BaseSessionStore):
             return False
 
         _t0 = _time.perf_counter()
-        _perf_log.info(
+        logger.info(
             "[PERF] redis.save_session START  session=%s  table_count=%d",
             session_id, len(tables),
         )
@@ -197,7 +204,7 @@ class RedisStore(BaseSessionStore):
             tables_b64 = base64.b64encode(tables_bytes).decode("utf-8")
             _t_ser_elapsed = _time.perf_counter() - _t_ser
             payload_kb = len(tables_b64) / 1024
-            _perf_log.info(
+            logger.info(
                 "[PERF] redis.save_session.serialize  session=%s  duration=%.3fs  payload_kb=%.1f",
                 session_id, _t_ser_elapsed, payload_kb,
             )
@@ -212,7 +219,7 @@ class RedisStore(BaseSessionStore):
             else:
                 self.redis.expire(key_graph, self.session_ttl)
             _t_set_elapsed = _time.perf_counter() - _t_set
-            _perf_log.info(
+            logger.info(
                 "[PERF] redis.save_session.redis_set  session=%s  duration=%.3fs",
                 session_id, _t_set_elapsed,
             )
@@ -224,7 +231,7 @@ class RedisStore(BaseSessionStore):
                 logger.warning("TTL sync for version keys skipped (session saved): %s", sync_e)
 
             _t_total = _time.perf_counter() - _t0
-            _perf_log.info(
+            logger.info(
                 "[PERF] redis.save_session END  session=%s  serialize=%.3fs  redis_set=%.3fs  total=%.3fs",
                 session_id, _t_ser_elapsed, _t_set_elapsed, _t_total,
             )
@@ -248,7 +255,7 @@ class RedisStore(BaseSessionStore):
             return None
 
         _t0 = _time.perf_counter()
-        _perf_log.info("[PERF] redis.load_session START  session=%s", session_id)
+        logger.info("[PERF] redis.load_session START  session=%s", session_id)
 
         try:
             key = KEY_SESSION_TABLES.format(sid=session_id)
@@ -257,7 +264,7 @@ class RedisStore(BaseSessionStore):
             _t_get = _time.perf_counter()
             data = self.redis.get(key)
             _t_get_elapsed = _time.perf_counter() - _t_get
-            _perf_log.info(
+            logger.info(
                 "[PERF] redis.load_session.redis_get  session=%s  duration=%.3fs  found=%s",
                 session_id, _t_get_elapsed, data is not None,
             )
@@ -271,14 +278,14 @@ class RedisStore(BaseSessionStore):
             tables_bytes = base64.b64decode(data)
             result = self.serializer.deserialize(tables_bytes)
             _t_des_elapsed = _time.perf_counter() - _t_des
-            _perf_log.info(
+            logger.info(
                 "[PERF] redis.load_session.deserialize  session=%s  duration=%.3fs  table_count=%d",
                 session_id, _t_des_elapsed, len(result) if result else 0,
             )
             _perf_warn("redis.load_session.deserialize", _t_des_elapsed, session_id)
 
             _t_total = _time.perf_counter() - _t0
-            _perf_log.info(
+            logger.info(
                 "[PERF] redis.load_session END  session=%s  redis_get=%.3fs  deserialize=%.3fs  total=%.3fs",
                 session_id, _t_get_elapsed, _t_des_elapsed, _t_total,
             )
@@ -397,7 +404,7 @@ class RedisStore(BaseSessionStore):
             return False
 
         _t0 = _time.perf_counter()
-        _perf_log.info(
+        logger.info(
             "[PERF] redis.save_version START  session=%s  version=%s",
             session_id, version_id,
         )
@@ -416,7 +423,7 @@ class RedisStore(BaseSessionStore):
             self.extend_ttl(session_id)
 
             _t_total = _time.perf_counter() - _t0
-            _perf_log.info(
+            logger.info(
                 "[PERF] redis.save_version END  session=%s  version=%s  "
                 "serialize=%.3fs  redis_set=%.3fs  total=%.3fs",
                 session_id, version_id, _t_ser_e, _t_set_e, _t_total,
@@ -442,7 +449,7 @@ class RedisStore(BaseSessionStore):
             return None
 
         _t0 = _time.perf_counter()
-        _perf_log.info(
+        logger.info(
             "[PERF] redis.load_version START  session=%s  version=%s",
             session_id, version_id,
         )
@@ -454,7 +461,7 @@ class RedisStore(BaseSessionStore):
             _t_get_e = _time.perf_counter() - _t_get
 
             if data is None:
-                _perf_log.info(
+                logger.info(
                     "[PERF] redis.load_version END  session=%s  version=%s  not_found  total=%.3fs",
                     session_id, version_id, _time.perf_counter() - _t0,
                 )
@@ -468,7 +475,7 @@ class RedisStore(BaseSessionStore):
             self.extend_ttl(session_id)
 
             _t_total = _time.perf_counter() - _t0
-            _perf_log.info(
+            logger.info(
                 "[PERF] redis.load_version END  session=%s  version=%s  "
                 "redis_get=%.3fs  deserialize=%.3fs  total=%.3fs",
                 session_id, version_id, _t_get_e, _t_des_e, _t_total,
@@ -539,7 +546,7 @@ class RedisStore(BaseSessionStore):
             return False
 
         _t0 = _time.perf_counter()
-        _perf_log.info(
+        logger.info(
             "[PERF] redis.update_graph START  session=%s  new_vid=%s  parent=%s",
             session_id, new_vid, parent_vid,
         )
@@ -564,7 +571,7 @@ class RedisStore(BaseSessionStore):
             _t_set_e = _time.perf_counter() - _t_set
 
             _t_total = _time.perf_counter() - _t0
-            _perf_log.info(
+            logger.info(
                 "[PERF] redis.update_graph END  session=%s  new_vid=%s  "
                 "get=%.3fs  pipeline_set=%.3fs  total=%.3fs  node_count=%d",
                 session_id, new_vid, _t_get_e, _t_set_e, _t_total,
@@ -590,7 +597,7 @@ class RedisStore(BaseSessionStore):
         dst = KEY_VERSION_TABLES.format(sid=session_id, vid=version_id)
 
         _t0 = _time.perf_counter()
-        _perf_log.info(
+        logger.info(
             "[PERF] redis.snapshot_copy START  session=%s  version=%s  method=COPY",
             session_id, version_id,
         )
@@ -601,7 +608,7 @@ class RedisStore(BaseSessionStore):
             if ok:
                 self.redis.expire(dst, self.session_ttl)
                 _t_elapsed = _time.perf_counter() - _t0
-                _perf_log.info(
+                logger.info(
                     "[PERF] redis.snapshot_copy END  session=%s  version=%s  method=COPY  duration=%.3fs",
                     session_id, version_id, _t_elapsed,
                 )
@@ -609,7 +616,7 @@ class RedisStore(BaseSessionStore):
                 return True
         except Exception as e:
             logger.warning("Redis COPY snapshot failed, using load/save fallback: %s", e)
-            _perf_log.warning(
+            logger.warning(
                 "[PERF] redis.snapshot_copy FALLBACK  session=%s  version=%s  reason=%s",
                 session_id, version_id, e,
             )
@@ -632,13 +639,13 @@ class RedisStore(BaseSessionStore):
         dst = KEY_SESSION_TABLES.format(sid=session_id)
 
         _t0 = _time.perf_counter()
-        _perf_log.info(
+        logger.info(
             "[PERF] redis.restore_copy START  session=%s  version=%s  method=COPY",
             session_id, version_id,
         )
         try:
             if not self.redis.exists(src):
-                _perf_log.info(
+                logger.info(
                     "[PERF] redis.restore_copy END  session=%s  version=%s  not_found",
                     session_id, version_id,
                 )
@@ -647,7 +654,7 @@ class RedisStore(BaseSessionStore):
             if ok:
                 self.redis.expire(dst, self.session_ttl)
                 _t_elapsed = _time.perf_counter() - _t0
-                _perf_log.info(
+                logger.info(
                     "[PERF] redis.restore_copy END  session=%s  version=%s  method=COPY  duration=%.3fs",
                     session_id, version_id, _t_elapsed,
                 )
@@ -655,7 +662,7 @@ class RedisStore(BaseSessionStore):
                 return True
         except Exception as e:
             logger.warning("Redis COPY restore failed, using load/save fallback: %s", e)
-            _perf_log.warning(
+            logger.warning(
                 "[PERF] redis.restore_copy FALLBACK  session=%s  version=%s  reason=%s",
                 session_id, version_id, e,
             )
