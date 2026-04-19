@@ -14,7 +14,8 @@ from ..prompts import get_summarizer_prompt
 from ..execution import generate_pandas_code, execute_pandas_code
 from ..execution.rule_based_executor import try_rule_based_execution
 from ..utils.session_loader import SessionLoader
-from ..utils.state_helpers import get_current_query
+from ..utils.state_helpers import get_current_query, get_tool_calls
+from ..run_df_context import get_run_df_dict
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ def insight_node(state: Dict) -> Dict:
     """
     try:
         update_trace_context(session_id=state.get("session_id"), metadata={"node": "insight"})
-        tool_calls = state.get("tool_calls", [])
+        tool_calls = get_tool_calls(state)
         insight_calls = [tc for tc in tool_calls if tc.get("name") == TOOL_INSIGHT]
         if not insight_calls:
             return state
@@ -104,11 +105,15 @@ def insight_node(state: Dict) -> Dict:
         session_id = state.get("session_id")
         schema = state.get("schema", {})
         query = get_current_query(state)
-        try:
-            df_dict = SessionLoader().load_session_dataframes(session_id)
-        except Exception as e:
-            state["error"] = f"Could not load data: {str(e)}"
-            return state
+        # Prefer DataFrames already loaded into state by prepare_state_dataframes;
+        # only fall back to a fresh Redis read if state is missing them (CLI / tests).
+        df_dict = state.get("df_dict") or get_run_df_dict()
+        if not df_dict:
+            try:
+                df_dict = SessionLoader().load_session_dataframes(session_id)
+            except Exception as e:
+                state["error"] = f"Could not load data: {str(e)}"
+                return state
         if not df_dict:
             state["error"] = "No data available for analysis"
             return state

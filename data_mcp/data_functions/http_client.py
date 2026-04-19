@@ -12,6 +12,8 @@ import requests
 import pandas as pd
 from typing import Dict, Any, Optional
 
+from .df_codec import encode_df, decode_df
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -142,6 +144,7 @@ class IngestionAPIClient:
             logger.debug(f"Received response with {len(data.get('tables', []))} tables")
 
             # ── deserialize ───────────────────────────────────────────────────
+            # T-5: decode_df handles AR1:, PK1:, and legacy unprefixed pickle.
             _t_des = _time.perf_counter()
             tables_dict = {}
             for table_info in data.get("tables", []):
@@ -150,8 +153,7 @@ class IngestionAPIClient:
 
                 if table_name and base64_data:
                     try:
-                        pickle_bytes = base64.b64decode(base64_data.encode('utf-8'))
-                        df = pickle.loads(pickle_bytes)
+                        df = decode_df(base64_data)
                         if isinstance(df, pd.DataFrame):
                             tables_dict[table_name] = df
                         else:
@@ -209,13 +211,13 @@ class IngestionAPIClient:
             url = f"{self.base_url}/api/session/{session_id}/tables"
 
             # ── serialize ─────────────────────────────────────────────────────
+            # T-5: encode_df produces an AR1:-prefixed Arrow IPC blob, falling
+            # back to PK1: pickle for frames Arrow can't represent.
             _t_ser = _time.perf_counter()
             tables_data = {}
             for table_name, df in tables_dict.items():
-                pickle_bytes = pickle.dumps(df)
-                base64_data = base64.b64encode(pickle_bytes).decode('utf-8')
                 tables_data[table_name] = {
-                    "data": base64_data,
+                    "data": encode_df(df),
                     "row_count": len(df),
                     "column_count": len(df.columns),
                     "columns": list(df.columns),

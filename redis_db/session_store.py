@@ -87,6 +87,21 @@ class BaseSessionStore(ABC, CurrentVersionMixin):
         """Copy a version snapshot back to live session tables (prefer Redis COPY)."""
         ...
 
+    # ── Raw KV helpers (T-3 transform cache) ────────────────────────────────
+    # Used by mcp_client.analyze_data (and any future caller) to piggy-back on
+    # the existing Redis connection for general-purpose string caching, without
+    # needing a separate Redis client. Implementations should accept str/bytes
+    # values and return bytes (or str for the Upstash REST backend).
+    @abstractmethod
+    def raw_get(self, key: str) -> Optional[Any]:
+        """Return the raw value at `key` or None if missing."""
+        ...
+
+    @abstractmethod
+    def raw_setex(self, key: str, ttl_seconds: int, value: Any) -> bool:
+        """Set `key` to `value` with TTL; returns True on success."""
+        ...
+
 
 def get_session_store() -> BaseSessionStore:
     if use_redis_cloud_kv():

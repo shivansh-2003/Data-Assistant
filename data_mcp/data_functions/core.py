@@ -37,34 +37,59 @@ load_dotenv()
 ENABLE_HTTP_SYNC = os.getenv("ENABLE_HTTP_SYNC", "true").lower() == "true"
 ENABLE_CACHE_IN_MEMORY = os.getenv("ENABLE_CACHE_IN_MEMORY", "true").lower() == "true"
 
-# Lazy function to get Redis store from main.py if running in same process
+# R-2: track the Redis store identity across calls so any accidental
+# re-construction (which would also re-create the underlying redis-py pool)
+# is loudly visible in logs. Audit conclusion: every path here resolves to
+# `main._default_store`, which `main.get_default_store()` constructs exactly
+# once via the lazy singleton pattern — so connection-pool reuse is correct.
+_SHARED_STORE_ID: Optional[int] = None
+
+
 def _get_shared_store():
-    """Get Redis store from main.py if available (lazy check at runtime)."""
+    """Get Redis store from main.py if available (lazy check at runtime).
+
+    Returns the same store instance across calls within a process (pool reuse).
+    """
+    global _SHARED_STORE_ID
+
+    store = None
     try:
-        # First try: check if main is already in sys.modules
         if 'main' in sys.modules:
             main_module = sys.modules['main']
             if hasattr(main_module, '_default_store'):
                 store = main_module._default_store
                 if store is not None:
                     logger.debug("Using shared Redis store from main.py (via sys.modules)")
-                    return store
     except Exception as e:
         logger.debug(f"Could not access store via sys.modules: {e}")
-    
-    try:
-        # Second try: import main module directly
-        import main
-        if hasattr(main, '_default_store'):
-            store = main._default_store
-            if store is not None:
-                logger.info("Using shared Redis store from main.py (direct import)")
-                return store
-    except (ImportError, AttributeError) as e:
-        logger.debug(f"Could not import main module: {e}")
-    except Exception as e:
-        logger.debug(f"Unexpected error accessing shared store: {e}")
-    return None
+
+    if store is None:
+        try:
+            import main
+            if hasattr(main, '_default_store'):
+                store = main._default_store
+                if store is not None:
+                    logger.info("Using shared Redis store from main.py (direct import)")
+        except (ImportError, AttributeError) as e:
+            logger.debug(f"Could not import main module: {e}")
+        except Exception as e:
+            logger.debug(f"Unexpected error accessing shared store: {e}")
+
+    # One-time sanity check: warn loudly if the singleton ever drifts
+    if store is not None:
+        sid = id(store)
+        if _SHARED_STORE_ID is None:
+            _SHARED_STORE_ID = sid
+            logger.info("[R-2] shared Redis store id=%s (%s) — locked in", sid, type(store).__name__)
+        elif sid != _SHARED_STORE_ID:
+            logger.warning(
+                "[R-2][POOL] shared Redis store changed identity: was=%s now=%s. "
+                "This means a new connection pool was created — investigate.",
+                _SHARED_STORE_ID, sid,
+            )
+            _SHARED_STORE_ID = sid
+
+    return store
 
 # Global session state (in-memory cache)
 # Structure: {session_id: {table_name: dataframe}}

@@ -2,8 +2,12 @@
 
 from .base import PromptTemplate, truncate_schema
 
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 
+# C-2 prompt cache alignment: rules + examples are the largest static block
+# in this prompt; they MUST come before any dynamic interpolation so the
+# 1024-token shared-prefix cache can latch on. {df_names}, {schema}, and
+# {query} live in the trailing `=== CONTEXT ===` block only.
 TEMPLATE = """You are a pandas code generation expert.
 
 Generate safe, efficient pandas code to answer the user's query.
@@ -25,14 +29,6 @@ Guidelines:
 - For filtering, use df[df['column'] condition]
 - Keep code simple and direct
 - Handle missing data gracefully (use .dropna() if needed)
-
-Available DataFrames:
-{df_names}
-
-Schema (columns and types):
-{schema}
-
-User Query: {query}
 
 Examples:
 Query: "What's the average Price?"
@@ -76,13 +72,19 @@ IMPORTANT RULES:
 - For STATISTICAL queries (average, count, sum): Return the number/value
 - For CORRELATION: Use .corr() only on NUMERIC columns. When the user asks for correlation without specifying two columns (e.g. "show correlation", "correlation matrix"), use: result = df.select_dtypes(include=['number']).corr(). When the user specifies two numeric columns use: df['col1'].corr(df['col2']). NEVER use df.corr() on the full dataframe (it may include non-numeric columns); NEVER use groupby(...)['col'].corr() with no arguments (SeriesGroupBy.corr() requires another series).
 - If user asks "correlation between X and Y" and one of X/Y is categorical (e.g. brand, category), interpret as "relationship of X by Y": use df.groupby('CategoricalCol')['NumericCol'].agg(['mean','count']).reset_index()
-- For "FOR EACH" / "BY GROUP" queries (max/min/highest/lowest for each X): 
+- For "FOR EACH" / "BY GROUP" queries (max/min/highest/lowest for each X):
   * Use df.loc[df.groupby('GroupColumn')['ValueColumn'].idxmax()] for max
   * Use df.loc[df.groupby('GroupColumn')['ValueColumn'].idxmin()] for min
   * This returns one FULL ROW per group, not just the aggregated value
 - For filtering, use operators: &, |, ~, ==, !=, <, >, <=, >=
 
-Now generate pandas code for the user's query. Only output the code, no explanations or markdown."""
+Now generate pandas code for the user's query. Only output the code, no explanations or markdown.
+
+=== CONTEXT ===
+Available DataFrames: {df_names}
+Schema (columns and types): {schema}
+User Query: {query}
+"""
 
 
 def get_code_generator_prompt(df_names: list, schema: dict, query: str) -> str:

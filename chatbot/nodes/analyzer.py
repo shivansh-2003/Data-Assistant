@@ -20,7 +20,9 @@ See: https://docs.langchain.com/oss/python/langchain/tools for LangChain's stand
 """
 
 import logging
-from typing import Dict, Any, List, Dict as DictType
+import os
+import time as _time
+from typing import Any, Dict, List
 from langchain_core.messages import SystemMessage, HumanMessage
 from langfuse import observe
 
@@ -38,7 +40,7 @@ from ..constants import (
 from ..prompts import get_analyzer_prompt
 from ..tools import get_all_tools
 from ..utils.profile_formatter import format_profile_for_prompt
-from ..utils.state_helpers import get_current_query
+from ..utils.state_helpers import get_current_query, get_tool_calls
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +66,8 @@ def _is_correlation_query(query: str) -> bool:
 
 
 def _coerce_correlation_viz_to_heatmap(
-    query: str, tool_calls: List[DictType[str, Any]]
-) -> List[DictType[str, Any]]:
+    query: str, tool_calls: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
     """
     Fix cases where LLM picks wrong chart type for correlation-style questions.
 
@@ -80,7 +82,7 @@ def _coerce_correlation_viz_to_heatmap(
     if not tool_calls or not _is_correlation_query(query):
         return tool_calls
 
-    fixed_calls: List[DictType[str, Any]] = []
+    fixed_calls: List[Dict[str, Any]] = []
     for tc in tool_calls:
         name = tc.get("name")
         # Convert bar_chart or scatter_chart to heatmap for correlation queries
@@ -119,6 +121,21 @@ def _coerce_correlation_viz_to_heatmap(
     return fixed_calls
 
 
+def dedupe_tool_calls_by_name(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep the first occurrence of each tool ``name`` (insight vs viz dedup).
+
+    Exposed for unit tests and for log verification (plan: verify-dedup-log).
+    """
+    seen_names: set = set()
+    deduped: list = []
+    for tc in tool_calls:
+        name = tc.get("name")
+        if name not in seen_names:
+            seen_names.add(name)
+            deduped.append(tc)
+    return deduped
+
+
 @observe(name="chatbot_analyzer", as_type="chain")
 def analyzer_node(state: Dict) -> Dict:
     """
@@ -154,8 +171,8 @@ def analyzer_node(state: Dict) -> Dict:
             data_profile_summary=data_profile_summary,
         )
         
-        # Initialize LLM with tools
-        llm = get_analyzer_llm()
+        # Initialize LLM with tools (tiered mini vs main when query is simple)
+        llm = get_analyzer_llm(query=query)
 
         # Get all available tools and bind to LLM (LangChain pattern)
         # Tools are defined with @tool decorator in chatbot/tools/
@@ -165,10 +182,12 @@ def analyzer_node(state: Dict) -> Dict:
         # Invoke LLM with tools - LLM decides which tools to call
         # This follows LangChain's tool-calling pattern:
         # https://docs.langchain.com/oss/python/langchain/tools
+        t_llm = _time.perf_counter()
         response = llm_with_tools.invoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=f"Query: {query}")
         ])
+        _llm_elapsed = _time.perf_counter() - t_llm
         
         # Extract tool calls from LLM response
         # Note: Unlike LangChain's ToolNode (which auto-executes tools),
@@ -183,9 +202,37 @@ def analyzer_node(state: Dict) -> Dict:
         # request, coerce that viz tool to heatmap_chart (correlation matrix).
         tool_calls = _coerce_correlation_viz_to_heatmap(query, tool_calls)
 
+        _before_dedup = list(tool_calls)
+        tool_calls = dedupe_tool_calls_by_name(tool_calls)
+        if len(tool_calls) < len(_before_dedup):
+            logger.warning(
+                "Deduped duplicate tool_calls %d → %d: %s",
+                len(_before_dedup),
+                len(tool_calls),
+                [tc.get("name") for tc in _before_dedup],
+            )
+
         state["tool_calls"] = tool_calls
-        
+
         logger.info(f"Selected {len(tool_calls)} tools: {[tc.get('name', 'unknown') for tc in tool_calls]}")
+
+        if os.getenv("PERF_LOG", "").lower() in ("1", "true", "yes"):
+            um = getattr(response, "usage_metadata", None) or {}
+            if not isinstance(um, dict):
+                um = {}
+            pt = um.get("input_tokens", um.get("prompt_tokens"))
+            ct = um.get("output_tokens", um.get("completion_tokens"))
+            tt = um.get("total_tokens")
+            logger.info(
+                "[PERF][LANGFUSE_HINT] chatbot.analyzer session=%s elapsed=%.3fs "
+                "prompt_tokens=%s completion_tokens=%s total_tokens=%s "
+                "(compare to Langfuse chatbot_analyzer span)",
+                state.get("session_id", ""),
+                _llm_elapsed,
+                pt,
+                ct,
+                tt,
+            )
         
         return state
         
@@ -206,8 +253,8 @@ def route_after_analyzer(state: Dict) -> str:
     - "responder" if no tools or small talk
     """
     intent = state.get("intent")
-    tool_calls = state.get("tool_calls", [])
-    
+    tool_calls = get_tool_calls(state)
+
     if intent == INTENT_SMALL_TALK or not tool_calls:
         return "responder"
     
@@ -222,4 +269,30 @@ def route_after_analyzer(state: Dict) -> str:
         return "viz"
     else:
         return "responder"
+
+
+def analyzer_cache_warm(query: str, schema: Dict[str, Any], session_id: str) -> None:
+    """C-6 prewarm scaffold.
+
+    Today this is a no-op. Once the C-1 Analyzer semantic cache lands, this
+    function should run the same prompt construction + embedding lookup the
+    analyzer node uses, store the resulting tool_calls in the cache keyed by
+    (semantic-hash(query) + schema-hash), and return without invoking the LLM
+    again. Until then we just log so the wiring can be verified end-to-end.
+
+    TODO(C-1): replace this stub with a cache.put(...) call that mirrors
+    `analyzer_node`'s tool selection. UI wiring in `streamlit_ui.py` is
+    already firing one daemon thread per chip, so the day C-1 lands the
+    speedup is automatic.
+    """
+    try:
+        n_tables = len((schema or {}).get("tables") or {})
+        logger.info(
+            "[PREWARM] noop  session=%s tables=%d query=%s…",
+            session_id,
+            n_tables,
+            (query or "")[:60],
+        )
+    except Exception as e:
+        logger.debug("analyzer_cache_warm logging failed: %s", e)
 

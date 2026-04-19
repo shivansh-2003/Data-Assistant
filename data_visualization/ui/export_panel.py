@@ -8,7 +8,21 @@ from typing import Optional
 
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 import streamlit as st
+
+
+@st.cache_data(show_spinner=False)
+def _render_figure_to_bytes(fig_json: str, fmt: str, width: int = 1200, height: int = 800) -> bytes:
+    """Convert a Plotly figure to image bytes — cached so Kaleido only runs when the
+    figure actually changes, not on every Streamlit rerun.
+
+    ``fig_json`` is the JSON serialization of the figure (used as the cache key).
+    We serialize+deserialize so the cache is keyed purely on figure content,
+    not on the in-memory object identity.
+    """
+    fig = pio.from_json(fig_json)
+    return fig.to_image(format=fmt, width=width, height=height)
 
 
 def render_export_panel(
@@ -29,10 +43,17 @@ def render_export_panel(
     export_chart_name = chart_mode if chart_mode != "basic" else chart_type
     export_height = 800
 
+    # Serialize once for all cached image calls below.
+    try:
+        fig_json = fig.to_json()
+    except Exception as e:
+        st.error(f"Could not serialize figure for export: {e}")
+        return
+
     col1, col2, col3 = st.columns(3)
     with col1:
         try:
-            img_bytes = fig.to_image(format="png", width=1200, height=export_height)
+            img_bytes = _render_figure_to_bytes(fig_json, "png", 1200, export_height)
             st.download_button(
                 "📥 Download PNG",
                 img_bytes,
@@ -47,7 +68,7 @@ def render_export_panel(
 
     with col2:
         try:
-            svg_bytes = fig.to_image(format="svg", width=1200, height=export_height)
+            svg_bytes = _render_figure_to_bytes(fig_json, "svg", 1200, export_height)
             st.download_button(
                 "📐 Download SVG",
                 svg_bytes,
@@ -78,7 +99,7 @@ def render_export_panel(
     e1, e2, e3 = st.columns(3)
     with e1:
         try:
-            pdf_bytes = fig.to_image(format="pdf", width=1200, height=export_height)
+            pdf_bytes = _render_figure_to_bytes(fig_json, "pdf", 1200, export_height)
             st.download_button(
                 "📄 Download PDF",
                 pdf_bytes,
@@ -159,7 +180,7 @@ fig.show()
         try:
             from pptx import Presentation
 
-            img_bytes = fig.to_image(format="png", width=1200, height=export_height)
+            img_bytes = _render_figure_to_bytes(fig_json, "png", 1200, export_height)
             prs = Presentation()
             slide_layout = prs.slide_layouts[5]
             slide = prs.slides.add_slide(slide_layout)

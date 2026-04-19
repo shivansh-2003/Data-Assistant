@@ -2,8 +2,10 @@
 
 from .base import PromptTemplate, truncate_schema
 
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 
+# C-2 hygiene: dynamic content lives only inside the trailing `=== CONTEXT ===`
+# block so the static prefix (intro, guidelines, examples) stays cacheable.
 TEMPLATE = """You are a query planning expert for data analysis.
 
 Break down complex queries into clear, sequential steps. For simple queries, return a single-step plan.
@@ -46,12 +48,14 @@ Plan:
   {{"step": 2, "description": "Filter to companies with average Price > 1000", "code": "result = step1_result[step1_result['Price'] > 1000]", "output_var": "result"}}
 ]
 
+Output a JSON array of steps. For simple queries, return a single-step plan. For complex queries, break into logical steps.
+
+=== CONTEXT ===
 Schema: {schema}
 Query Intent: {intent}
 Sub-intent: {sub_intent}
 Query: {query}
-
-Output a JSON array of steps. For simple queries, return a single-step plan. For complex queries, break into logical steps."""
+"""
 
 
 def get_planner_prompt(

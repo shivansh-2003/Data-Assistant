@@ -16,6 +16,8 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
 import asyncio
+import queue
+import threading
 import time
 import uuid
 import logging
@@ -23,12 +25,14 @@ import graphviz
 import base64
 import pickle
 from datetime import datetime
+from typing import Iterator, Tuple
 from log_setup import setup_logging
 setup_logging()
 
 from data_visualization import render_visualization_tab
 from data_visualization.cache_invalidation import on_data_changed
 from chatbot.streamlit_ui import render_chatbot_tab
+from chatbot.ui import invalidate_chart_df_cache
 from components.data_table import render_advanced_table
 from components.empty_state import render_empty_state
 from observability.langfuse_client import update_trace_context
@@ -95,6 +99,36 @@ SESSION_ENDPOINT = f"{FASTAPI_URL}/api/session"
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", f"{FASTAPI_URL}/data/mcp")
 OPENAI_API_KEY = get_secret("openai.api_key", "OPENAI_API_KEY")
 OPENAI_MODEL = get_secret("openai.model", "OPENAI_MODEL", "gpt-4o")
+
+# T-4: kick off MCP agent warmup in the background once per Python process.
+# Streamlit re-runs the script on every interaction, so the guard prevents
+# duplicate warmup threads from piling up.
+if not getattr(st, "_mcp_warmup_started", False):
+    try:
+        from mcp_client import warmup_agent_in_background
+        warmup_agent_in_background()
+        st._mcp_warmup_started = True  # type: ignore[attr-defined]
+    except Exception as _e:
+        logger.debug("MCP background warmup not started: %s", _e)
+
+# C-2 regression guard: log the AGENT_SYSTEM_MESSAGE token count exactly once
+# per Python process. OpenAI's automatic prompt cache only activates once the
+# static prefix exceeds 1024 tokens, so we want a loud signal at startup if
+# someone trims the prompt back under that threshold. Gated by PERF_LOG to
+# keep normal startup quiet.
+if PERF_LOG and not getattr(st, "_mcp_prompt_token_check_done", False):
+    try:
+        import tiktoken as _tk
+        from mcp_client import AGENT_SYSTEM_MESSAGE as _ASM
+        _tok = len(_tk.encoding_for_model("gpt-4o").encode(_ASM))
+        _verdict = "OK >=1024" if _tok >= 1024 else "BELOW 1024 — prompt cache will not engage"
+        logger.info(
+            "[PERF] mcp.system_prompt_tokens=%d  status=%s  chars=%d",
+            _tok, _verdict, len(_ASM),
+        )
+        st._mcp_prompt_token_check_done = True  # type: ignore[attr-defined]
+    except Exception as _e:
+        logger.debug("AGENT_SYSTEM_MESSAGE token check skipped: %s", _e)
 
 # Page configuration
 st.set_page_config(
@@ -637,6 +671,83 @@ def analyze_data_sync(session_id: str, query: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+# ---------------------------------------------------------------------------
+# T-2: thread+queue bridge from sync Streamlit code to the async streaming
+# generator. The async generator runs in a daemon thread with its own event
+# loop (asyncio.run); each yielded event lands on a queue the Streamlit
+# thread drains synchronously. The try/finally ensures the worker thread is
+# joined when Streamlit reruns/aborts the consumer mid-stream so we don't
+# leak threads, and the cache write only fires on a clean ("final", text)
+# event (the streaming generator itself enforces this).
+# ---------------------------------------------------------------------------
+def analyze_data_stream_sync(
+    session_id: str, query: str
+) -> Iterator[Tuple[str, Any]]:
+    """Drive `mcp_client.analyze_data_stream` from sync Streamlit.
+
+    Yields the same `(event_type, payload)` tuples the async generator emits.
+    Raises `RuntimeError` if the async side reported an error and produced no
+    final text, so callers can keep their existing try/except around the call.
+    """
+    from mcp_client import analyze_data_stream
+
+    q: "queue.Queue[Tuple[str, Any]]" = queue.Queue()
+
+    def _runner() -> None:
+        async def _go() -> None:
+            async for ev in analyze_data_stream(session_id, query):
+                q.put(ev)
+            q.put(("__done__", None))
+
+        try:
+            asyncio.run(_go())
+        except Exception as e:
+            logger.error(
+                "[STREAM] runner crashed  session=%s  error=%s",
+                session_id, e, exc_info=True,
+            )
+            q.put(("__error__", str(e)))
+            q.put(("__done__", None))
+
+    t = threading.Thread(target=_runner, name="mcp-stream", daemon=True)
+    t.start()
+    try:
+        while True:
+            ev = q.get()
+            if ev[0] == "__done__":
+                return
+            if ev[0] == "__error__":
+                raise RuntimeError(ev[1])
+            yield ev
+    finally:
+        t.join(timeout=2.0)
+
+
+# Map MCP tool names to human-readable status captions for the streaming UI.
+# Falls back to "Running {name}…" for tools not listed here so new MCP tools
+# still get reasonable copy without code changes.
+_TOOL_LABELS: Dict[str, str] = {
+    "initialize_data_table":  "Loading session data…",
+    "filter_rows":            "Filtering rows…",
+    "filter_rows_advanced":   "Filtering rows…",
+    "groupby_aggregate":      "Aggregating…",
+    "sort_values":            "Sorting…",
+    "drop_columns":           "Dropping columns…",
+    "rename_columns":         "Renaming columns…",
+    "drop_duplicates":        "Removing duplicates…",
+    "fill_missing":           "Filling missing values…",
+    "replace_values":         "Replacing values…",
+    "cast_column":            "Casting column types…",
+    "select_columns":         "Selecting columns…",
+    "merge_tables":           "Merging tables…",
+    "pivot_table":            "Pivoting…",
+}
+
+
+def _friendly_tool_label(tool_name: str) -> str:
+    return _TOOL_LABELS.get(tool_name, f"Running {tool_name}…")
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def get_session_tables_for_display(session_id: str) -> Optional[Dict]:
     """
@@ -1139,7 +1250,7 @@ def render_manipulation_tab():
                 "status=%d  duration=%.3fs",
                 session_id, target_vid, r.status_code, _tb,
             )
-            _benchmark_warn("app.branch_http", _tb, session_id)
+            _perf_warn("app.branch_http", _tb, session_id)
             if r.status_code == 200:
                 get_full_table_dataframe.clear()
                 get_session_tables_for_display.clear()
@@ -1418,11 +1529,16 @@ def render_manipulation_tab():
             st.error(f"❌ Session '{session_id}' not found or expired. Please upload a new file.")
             return
         
-        # Execute query
+        # Execute query (T-2: streamed)
         with st.status("🤔 Processing your query...", expanded=True) as status:
             progress = st.progress(0)
+            # Two stable DOM nodes inside the status: caption (tool/lifecycle
+            # status) and body (token-by-token markdown with a blinking cursor).
+            status_caption = st.empty()
+            response_body = st.empty()
             try:
                 progress.progress(0.2, text="Sending query to analysis engine")
+                status_caption.caption("_Connecting to the analysis engine…_")
 
                 # ── PERF: LLM + MCP tool calls ──────────────────────────
                 _t_llm_start = time.perf_counter()
@@ -1430,14 +1546,56 @@ def render_manipulation_tab():
                     "[PERF] app.analyze_data_sync START  session=%s  query_len=%d",
                     session_id, len(query),
                 )
-                result = analyze_data_sync(session_id, query)
+
+                streamed_text = ""
+                final_text = ""
+                from_cache = False
+                tool_progress_steps = 0
+
+                try:
+                    for ev_type, payload in analyze_data_stream_sync(session_id, query):
+                        if ev_type == "tool_start":
+                            tool_progress_steps += 1
+                            status_caption.caption(
+                                f"_{_friendly_tool_label(payload)}_"
+                            )
+                            # Smoothly nudge the progress bar so the user sees
+                            # motion even before any tokens arrive.
+                            progress.progress(
+                                min(0.2 + 0.1 * tool_progress_steps, 0.6),
+                                text=f"Running {payload}",
+                            )
+                        elif ev_type == "tool_end":
+                            # Caption updates again on the next tool_start or
+                            # first token; nothing to do here.
+                            pass
+                        elif ev_type == "cached":
+                            from_cache = True
+                            final_text = payload
+                            status_caption.caption("_✓ Cached result_")
+                            with response_body.container():
+                                st.markdown(payload)
+                        elif ev_type == "token":
+                            streamed_text += payload
+                            with response_body.container():
+                                st.markdown(streamed_text + "▌")
+                        elif ev_type == "final":
+                            final_text = payload or streamed_text
+                            # Drop the cursor on the final, complete text.
+                            if streamed_text and not from_cache:
+                                with response_body.container():
+                                    st.markdown(final_text)
+                    result = {"success": True, "response": final_text}
+                except RuntimeError as e:
+                    result = {"success": False, "error": str(e)}
+
                 _t_llm = time.perf_counter() - _t_llm_start
                 logger.info(
                     "[PERF] app.analyze_data_sync END  session=%s  duration=%.3fs  status=%s",
                     session_id, _t_llm,
                     "success" if result.get("success") else "error",
                 )
-                _benchmark_warn("app.analyze_data_sync", _t_llm, session_id)
+                _perf_warn("app.analyze_data_sync", _t_llm, session_id)
                 # ────────────────────────────────────────────────────────
 
                 if result.get("success"):
@@ -1448,12 +1606,13 @@ def render_manipulation_tab():
                     on_data_changed()
                     get_session_tables_for_display.clear()
                     get_full_table_dataframe.clear()
+                    invalidate_chart_df_cache(session_id)
                     _t_cache = time.perf_counter() - _t_cache_start
                     logger.info(
                         "[PERF] app.post_op.cache_clear  session=%s  duration=%.3fs",
                         session_id, _t_cache,
                     )
-                    _benchmark_warn("app.post_op.cache_clear", _t_cache, session_id)
+                    _perf_warn("app.post_op.cache_clear", _t_cache, session_id)
                     # ────────────────────────────────────────────────────
 
                     try:
@@ -1484,7 +1643,7 @@ def render_manipulation_tab():
                             "status=%d  duration=%.3fs",
                             session_id, new_vid, save_version_response.status_code, _t_sv,
                         )
-                        _benchmark_warn("app.post_op.save_version_http", _t_sv, session_id)
+                        _perf_warn("app.post_op.save_version_http", _t_sv, session_id)
                         # ────────────────────────────────────────────────
 
                         if save_version_response.status_code == 200:
@@ -1518,17 +1677,12 @@ def render_manipulation_tab():
                     })
 
                     progress.progress(1.0, text="Completed")
+                    status_caption.empty()
                     status.update(label="Operation completed", state="complete")
                     st.success("✅ Operation completed successfully!")
                     st.info("💡 Data has been updated. Scroll down to see the changes.")
-
-                    # Show response
-                    response_text = result.get("response", "")
-                    if response_text:
-                        with st.expander("📝 Operation Details", expanded=True):
-                            st.markdown(response_text)
-
-                    # Refresh the page to show updated data
+                    # Response was streamed live into `response_body` above; no
+                    # need to re-render it in an expander here.
                     st.rerun()
                 else:
                     error_msg = result.get("error", "Unknown error occurred")

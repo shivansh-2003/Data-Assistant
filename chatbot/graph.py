@@ -1,5 +1,7 @@
 """LangGraph state graph definition for InsightBot."""
 
+import hashlib
+import json
 import logging
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -11,6 +13,21 @@ from .constants import (
     INTENT_DATA_QUERY,
     VIZ_TOOL_NAMES,
 )
+
+
+def _hash_schema(schema: dict) -> str:
+    """Match the fingerprint computed in chat_input so we can compare across turns."""
+    try:
+        tables = (schema or {}).get("tables") or {}
+        compact = {
+            t: sorted((info or {}).get("columns") or [])
+            for t, info in tables.items()
+        }
+        return hashlib.md5(
+            json.dumps(compact, sort_keys=True).encode()
+        ).hexdigest()
+    except Exception:
+        return ""
 from .nodes import (
     router_node,
     analyzer_node,
@@ -22,7 +39,7 @@ from .nodes import (
     clarification_node
 )
 from .nodes.analyzer import route_after_analyzer
-from .utils.state_helpers import get_current_query
+from .utils.state_helpers import get_current_query, get_tool_calls
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +72,12 @@ workflow.set_entry_point("router")
 
 # Add edges from router
 def route_from_router(state: dict) -> str:
-    """Route from router based on intent and clarification."""
+    """Route from router based on intent, clarification, and follow-up reuse.
+
+    C-5 fast path: when the router flagged the message as a follow-up and we
+    have the prior turn's tool selection (with an unchanged schema), skip the
+    analyzer LLM and reuse those tool_calls directly. Saves ~1–2s per turn.
+    """
     if state.get("needs_clarification"):
         return "clarification"
     intent = state.get("intent", INTENT_DATA_QUERY)
@@ -63,6 +85,26 @@ def route_from_router(state: dict) -> str:
         return "responder"
     if intent == INTENT_SUMMARIZE_LAST:
         return "insight"  # insight node handles summarize_last (re-summarize previous result)
+
+    prior_tool_calls = state.get("prior_tool_calls")
+    if (
+        state.get("is_follow_up")
+        and prior_tool_calls
+        and not state.get("error")
+    ):
+        prior_hash = state.get("prior_schema_hash") or ""
+        current_hash = _hash_schema(state.get("schema") or {})
+        # Only reuse when the underlying tables/columns haven't shifted
+        if prior_hash and prior_hash == current_hash:
+            state["tool_calls"] = prior_tool_calls
+            logger.info(
+                "[FOLLOWUP REUSE] skipping analyzer, reusing %d prior tool call(s)",
+                len(prior_tool_calls),
+            )
+            # Mirror the router_node→insight short-circuit so insight runs without analyzer
+            return "insight"
+        logger.info("[FOLLOWUP] schema changed; falling through to analyzer")
+
     return "analyzer"
 
 workflow.add_conditional_edges(
@@ -118,7 +160,7 @@ workflow.add_edge("planner", "insight")
 # Add edges from insight
 def route_from_insight(state: dict) -> str:
     """Route from insight to viz if viz tools present, else responder."""
-    tool_calls = state.get("tool_calls", [])
+    tool_calls = get_tool_calls(state)
     has_viz = any(tc.get("name") in VIZ_TOOL_NAMES for tc in tool_calls)
     return "viz" if has_viz else "responder"
 
@@ -134,8 +176,24 @@ workflow.add_conditional_edges(
 # Add edge from viz to responder
 workflow.add_edge("viz", "responder")
 
-# Add edge from responder to suggestion (generate follow-up chips), then END
-workflow.add_edge("responder", "suggestion")
+# Skip the suggestion node entirely for intents where chips add no value
+# (small talk, mid-clarification turns, errors). Saves ~1 LLM call (~0.5–1s).
+SKIP_SUGGESTION_INTENTS = frozenset({INTENT_SMALL_TALK})
+
+
+def route_after_responder(state: dict) -> str:
+    if state.get("needs_clarification") or state.get("error"):
+        return END
+    if state.get("intent") in SKIP_SUGGESTION_INTENTS:
+        return END
+    return "suggestion"
+
+
+workflow.add_conditional_edges(
+    "responder",
+    route_after_responder,
+    {"suggestion": "suggestion", END: END},
+)
 workflow.add_edge("suggestion", END)
 
 # Compile graph with checkpointer

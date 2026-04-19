@@ -623,7 +623,15 @@ session_ttl_minutes = 30
 
 **Option B: Using Environment Variables (Legacy)**
 
-Alternatively, create a `.env` file in the project root:
+Alternatively, create a `.env` file in the project root (see `.env.example`
+for the full template).
+
+> **Production recommendation:** prefer the standard Redis path (`REDIS_URL`
+> or host/port credentials). It uses `redis-py` with a connection pool and
+> consistently outperforms the Upstash REST backend on per-request latency.
+> The Upstash REST path is kept as a zero-infra fallback for development
+> and demo deployments. The active backend is logged at startup as
+> `[REDIS] backend=cloud` or `[REDIS] backend=upstash-rest`.
 
 ```bash
 SESSION_TTL_MINUTES=30

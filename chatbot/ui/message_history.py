@@ -5,14 +5,38 @@ from datetime import datetime
 from langchain_core.messages import HumanMessage, AIMessage
 
 
-def display_session_pill(session_id: str):
-    """Compact session indicator (pill) with optional expandable details."""
+@st.cache_data(show_spinner=False, ttl=300)
+def _load_session_pill_data(session_id: str) -> dict:
+    """Fetch only the metadata fields needed for the session pill.
+
+    Uses the Redis store's ``get_metadata`` directly — avoids loading full
+    DataFrames the way ``get_session_summary`` does.  Cached per session_id
+    for 5 minutes so the pill text doesn't hit Redis on every Streamlit rerun.
+    """
+    from redis_db import get_session_store
     try:
-        from ..utils.session_loader import SessionLoader
-        loader = SessionLoader()
-        summary = loader.get_session_summary(session_id)
-        tables = summary.get("table_count", 0)
-        file_name = summary.get("file_name") or "Uploaded file"
+        store = get_session_store()
+        meta = store.get_metadata(session_id) or {}
+        # Count tables via a lightweight key listing rather than deserialising
+        # the full DataFrames.  Fall back to loading if count is unavailable.
+        table_count = meta.get("table_count")
+        if table_count is None:
+            tables = store.load_session(session_id) or {}
+            table_count = len(tables)
+        return {
+            "file_name": meta.get("file_name") or "Uploaded file",
+            "table_count": int(table_count),
+        }
+    except Exception:
+        return {"file_name": "Uploaded file", "table_count": 0}
+
+
+def display_session_pill(session_id: str):
+    """Compact session indicator (pill) — metadata only, no DataFrame load."""
+    try:
+        info = _load_session_pill_data(session_id)
+        file_name = info["file_name"]
+        tables = info["table_count"]
         if len(file_name) > 18:
             file_name = file_name[:15] + "…"
         st.caption(f"📁 {file_name} · {tables} table{'s' if tables != 1 else ''}")
@@ -23,19 +47,15 @@ def display_session_pill(session_id: str):
 def display_session_info(session_id: str):
     """Display session information in an expander (legacy / optional)."""
     try:
-        from ..utils.session_loader import SessionLoader
-        loader = SessionLoader()
-        summary = loader.get_session_summary(session_id)
+        info = _load_session_pill_data(session_id)  # reuse the cached metadata fetch
         with st.expander("📋 Session details", expanded=False):
             col1, col2 = st.columns(2)
             with col1:
                 st.write(f"**Session ID:** `{session_id[:24]}…`")
-                st.write(f"**Tables:** {summary.get('table_count', 0)}")
+                st.write(f"**Tables:** {info.get('table_count', 0)}")
             with col2:
-                if summary.get("file_name"):
-                    st.write(f"**File:** {summary.get('file_name')}")
-                if summary.get("file_type"):
-                    st.write(f"**Type:** {summary.get('file_type')}")
+                if info.get("file_name"):
+                    st.write(f"**File:** {info.get('file_name')}")
     except Exception as e:
         import logging
         logging.warning(f"Could not load session summary: {e}")

@@ -401,6 +401,29 @@ class RedisCloudStore(BaseSessionStore):
         meta = self.get_metadata(session_id) or {}
         return self.save_session(session_id, tables, meta)
 
+    # ── Raw KV helpers (T-3 transform cache) ────────────────────────────────
+    def raw_get(self, key: str) -> Optional[Any]:
+        if not self.is_connected():
+            return None
+        try:
+            return self._client.get(key)
+        except Exception as e:
+            logger.warning("raw_get(%s) failed: %s", key, e)
+            return None
+
+    def raw_setex(self, key: str, ttl_seconds: int, value: Any) -> bool:
+        if not self.is_connected():
+            return False
+        try:
+            # redis-py with decode_responses=False accepts bytes or str transparently
+            if isinstance(value, str):
+                value = value.encode("utf-8")
+            self._client.setex(key, ttl_seconds, value)
+            return True
+        except Exception as e:
+            logger.warning("raw_setex(%s) failed: %s", key, e)
+            return False
+
     def scan_keys(self, pattern: str) -> List[str]:
         return self._scan_keys(pattern)
 

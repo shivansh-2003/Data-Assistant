@@ -3,6 +3,7 @@
 import logging
 from typing import Dict
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.runnables import RunnableConfig
 from langfuse import observe
 
 from observability.langfuse_client import update_trace_context
@@ -33,7 +34,7 @@ def _apply_tone(response_text: str, state: Dict) -> str:
 
 
 @observe(name="chatbot_responder", as_type="chain")
-def responder_node(state: Dict) -> Dict:
+def responder_node(state: Dict, config: RunnableConfig | None = None) -> Dict:
     """
     Format final response combining insights and visualizations.
     
@@ -49,7 +50,7 @@ def responder_node(state: Dict) -> Dict:
         query = get_current_query(state)
 
         if intent == INTENT_SMALL_TALK:
-            response_text = generate_small_talk_response(query)
+            response_text = generate_small_talk_response(query, config=config)
         # Handle "did you mean" column suggestion
         elif state.get("error_suggestion") and state["error_suggestion"].get("type") == "did_you_mean":
             bad = state["error_suggestion"].get("bad_column", "that column")
@@ -107,7 +108,7 @@ def responder_node(state: Dict) -> Dict:
                     response_text += " Here's a table view above."
             else:
                 # No insight or viz - generate generic response
-                response_text = format_fallback_response(query, state)
+                response_text = format_fallback_response(query, state, config=config)
         
         # Tone adaptation: adjust response style based on user_tone
         response_text = _apply_tone(response_text, state)
@@ -138,15 +139,23 @@ def responder_node(state: Dict) -> Dict:
         return state
 
 
-def generate_small_talk_response(query: str) -> str:
-    """Generate response for small talk."""
+def generate_small_talk_response(query: str, config: RunnableConfig | None = None) -> str:
+    """Generate response for small talk.
+
+    ``config`` is the LangGraph RunnableConfig passed by the graph framework.
+    Forwarding it to ``llm.invoke`` wires up the streaming callbacks so that
+    ``stream_mode="messages"`` emits token chunks for small-talk replies.
+    """
     try:
         llm = get_small_talk_llm()
-        
-        response = llm.invoke([
-            SystemMessage(content=get_small_talk_prompt()),
-            HumanMessage(content=query)
-        ])
+        invoke_kwargs = {"config": config} if config is not None else {}
+        response = llm.invoke(
+            [
+                SystemMessage(content=get_small_talk_prompt()),
+                HumanMessage(content=query),
+            ],
+            **invoke_kwargs,
+        )
         
         return response.content
         
@@ -155,24 +164,31 @@ def generate_small_talk_response(query: str) -> str:
         return "Hello! I'm here to help you analyze your data. What would you like to know?"
 
 
-def format_fallback_response(query: str, state: Dict) -> str:
-    """Format fallback response when no insight or viz available."""
+def format_fallback_response(query: str, state: Dict, config: RunnableConfig | None = None) -> str:
+    """Format fallback response when no insight or viz available.
+
+    ``config`` is the LangGraph RunnableConfig; forwarding it enables token
+    streaming via ``stream_mode="messages"`` callbacks.
+    """
     try:
         llm = get_responder_llm()
-        
+
         schema = state.get("schema", {})
-        
+
         system_content = get_responder_prompt(query=query, insights="No analysis yet.", has_viz=False)
         prompt = f"""The user asked: {query}
 
 Session data schema: {schema}
 
 Generate a helpful response acknowledging their question and suggesting how you could help analyze their data."""
-        
-        response = llm.invoke([
-            SystemMessage(content=system_content),
-            HumanMessage(content=prompt)
-        ])
+        invoke_kwargs = {"config": config} if config is not None else {}
+        response = llm.invoke(
+            [
+                SystemMessage(content=system_content),
+                HumanMessage(content=prompt),
+            ],
+            **invoke_kwargs,
+        )
         
         return response.content
         

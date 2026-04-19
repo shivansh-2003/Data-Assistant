@@ -40,6 +40,7 @@ from pydantic import BaseModel
 # =============================================================================
 from ingestion.config import IngestionConfig
 from redis_db.constants import KEY_SESSION_GRAPH
+from data_mcp.data_functions.df_codec import encode_df, decode_df
 
 # =============================================================================
 # MCP — side-effect imports must fire before mcp.http_app() is called.
@@ -140,6 +141,16 @@ if os.getenv("ENABLE_MCP", "true").lower() == "true":
 async def _app_lifespan(app: FastAPI):
     """Redis connectivity check + FastMCP Streamable HTTP session manager."""
     store = get_default_store()
+    # R-1: surface which Redis backend is actually wired up so deployment
+    # mistakes (e.g. accidentally falling back to Upstash REST) are obvious
+    # in the logs from the moment the server boots.
+    from redis_db.constants import use_redis_cloud_kv
+    backend = "cloud" if use_redis_cloud_kv() else "upstash-rest"
+    backend_class = type(store).__name__
+    logger.info(
+        "[REDIS] backend=%s  store=%s  connected=%s",
+        backend, backend_class, store.is_connected(),
+    )
     if store.is_connected():
         logger.info("Redis session store: connected — session tables will persist.")
     else:
@@ -412,11 +423,13 @@ async def get_session_tables(
     store.extend_ttl(session_id)
 
     if format == "full":
+        # T-5: Arrow IPC for the body (with pickle fallback inside encode_df)
+        # gives us a versioned wire format the client can decode either way.
         table_list = []
         for name, df in tables.items():
             table_list.append({
                 "table_name": name,
-                "data": base64.b64encode(pickle.dumps(df)).decode("utf-8"),
+                "data": encode_df(df),
                 "row_count": len(df),
                 "column_count": len(df.columns),
                 "columns": list(df.columns),
@@ -471,7 +484,8 @@ async def update_session_tables(session_id: str, request_data: dict):
         base64_data = table_info.get("data")
         if not base64_data:
             raise HTTPException(status_code=400, detail=f"Missing data for table '{table_name}'")
-        df = pickle.loads(base64.b64decode(base64_data.encode("utf-8")))
+        # T-5: decode_df sniffs the AR1:/PK1:/legacy prefix and dispatches.
+        df = decode_df(base64_data)
         if not isinstance(df, pd.DataFrame):
             raise ValueError(f"Deserialized data for table '{table_name}' is not a DataFrame")
         tables_dict[table_name] = df

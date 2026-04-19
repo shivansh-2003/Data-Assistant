@@ -2,10 +2,12 @@
 
 import streamlit as st
 import logging
+import threading
 
 from .graph import graph
 from .utils.session_loader import prepare_state_dataframes
 from .constants import USER_TONES, USER_TONE_EXPLORER
+from .nodes.analyzer import analyzer_cache_warm
 from .ui import (
     display_message_history,
     display_session_pill,
@@ -149,6 +151,29 @@ def render_chatbot_tab():
                             st.session_state["pending_chat_query"] = sug
                             st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
+
+                # C-6 scaffold: speculatively prewarm the analyzer cache for each
+                # rendered chip. Today `analyzer_cache_warm` is a no-op log; once
+                # the C-1 semantic cache lands, these threads will populate it so
+                # a chip click feels instantaneous. Guarded by session_state to
+                # avoid double-prewarming on rerun.
+                _prewarm_key = f"_prewarmed_{session_id}_{hash(tuple(suggestions[:3]))}"
+                if not st.session_state.get(_prewarm_key):
+                    schema = current_state.values.get("schema") or {}
+
+                    def _prewarm(q: str, sch: dict, sid: str) -> None:
+                        try:
+                            analyzer_cache_warm(q, sch, sid)
+                        except Exception as e:
+                            logger.debug("prewarm failed for %r: %s", q, e)
+
+                    for chip in suggestions[:3]:
+                        threading.Thread(
+                            target=_prewarm,
+                            args=(chip, schema, session_id),
+                            daemon=True,
+                        ).start()
+                    st.session_state[_prewarm_key] = True
             st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown('<div class="card-elevated" role="region" aria-label="Chat input">', unsafe_allow_html=True)

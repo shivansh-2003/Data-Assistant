@@ -11,7 +11,7 @@ from observability.langfuse_client import update_trace_context
 from ..constants import INTENT_SMALL_TALK, INTENT_DATA_QUERY, TOOL_INSIGHT
 from ..llm_registry import get_planner_llm
 from ..prompts import get_planner_prompt
-from ..utils.state_helpers import get_current_query
+from ..utils.state_helpers import get_current_query, get_tool_calls
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ def planner_node(state: Dict) -> Dict:
             state["needs_planning"] = False
             return state
         
-        tool_calls = state.get("tool_calls", [])
+        tool_calls = get_tool_calls(state)
         insight_calls = [tc for tc in tool_calls if tc.get("name") == TOOL_INSIGHT]
         if not insight_calls:
             state["plan"] = None
@@ -160,10 +160,12 @@ def planner_node(state: Dict) -> Dict:
         # Initialize LLM
         llm = get_planner_llm()
 
-        # Get plan
+        # C-2: the query is already in the system prompt's CONTEXT block.
+        # Keep the human message constant so prompt-cache prefix matching is
+        # not broken by per-turn variation in the human content.
         response = llm.invoke([
             SystemMessage(content=system_prompt),
-            HumanMessage(content=f"Create a step-by-step plan for: {insight_query}")
+            HumanMessage(content="Plan now."),
         ])
         
         plan_text = response.content or ""

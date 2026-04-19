@@ -673,3 +673,26 @@ class RedisStore(BaseSessionStore):
             return False
         meta = self.get_metadata(session_id) or {}
         return self.save_session(session_id, tables, meta)
+
+    # ── Raw KV helpers (T-3 transform cache) ────────────────────────────────
+    def raw_get(self, key: str) -> Optional[Any]:
+        if not self.is_connected():
+            return None
+        try:
+            return self.redis.get(key)
+        except Exception as e:
+            logger.warning("raw_get(%s) failed: %s", key, e)
+            return None
+
+    def raw_setex(self, key: str, ttl_seconds: int, value: Any) -> bool:
+        if not self.is_connected():
+            return False
+        try:
+            # Upstash REST accepts str values; coerce bytes to utf-8 if needed
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            self.redis.setex(key, ttl_seconds, value)
+            return True
+        except Exception as e:
+            logger.warning("raw_setex(%s) failed: %s", key, e)
+            return False

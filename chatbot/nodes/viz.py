@@ -43,6 +43,8 @@ from ..constants import (
 )
 from ..utils.profile_formatter import is_suitable_for_chart
 from ..utils.session_loader import SessionLoader
+from ..utils.state_helpers import get_tool_calls
+from ..run_df_context import get_run_df_dict
 
 logger = logging.getLogger(__name__)
 
@@ -247,8 +249,8 @@ def viz_node(state: Dict) -> Dict:
     """
     try:
         update_trace_context(session_id=state.get("session_id"), metadata={"node": "viz"})
-        tool_calls = state.get("tool_calls", [])
-        
+        tool_calls = get_tool_calls(state)
+
         # Find viz tool calls (single source: constants.VIZ_TOOL_NAMES)
         viz_calls = [tc for tc in tool_calls if tc.get("name") in VIZ_TOOL_NAMES]
         
@@ -260,8 +262,9 @@ def viz_node(state: Dict) -> Dict:
             logger.warning("No session_id in state for visualization")
             return state
 
-        # Load session data once for validation and fallback
-        dfs = SessionLoader().load_session_dataframes(session_id)
+        # Reuse DataFrames loaded once at graph entry; fall back to Redis read
+        # if state lacks them (CLI / tests).
+        dfs = state.get("df_dict") or get_run_df_dict() or SessionLoader().load_session_dataframes(session_id)
 
         # Process first viz call (can extend to handle multiple)
         viz_call = viz_calls[0]

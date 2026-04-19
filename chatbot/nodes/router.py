@@ -1,6 +1,8 @@
 """Router node for intent classification."""
 
 import logging
+import os
+import time as _time
 from langchain_core.messages import SystemMessage, HumanMessage
 from typing import Dict, List, Optional
 from langfuse import observe
@@ -123,15 +125,24 @@ def router_node(state: Dict) -> Dict:
         structured_llm = llm.with_structured_output(IntentClassification)
         
         # Classify intent
+        t_route = _time.perf_counter()
         result = structured_llm.invoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=query)
         ])
-        
+        if os.getenv("PERF_LOG", "").lower() in ("1", "true", "yes"):
+            logger.info(
+                "[PERF][LANGFUSE_HINT] chatbot.router session=%s elapsed=%.3fs "
+                "(compare to Langfuse chatbot_router span)",
+                state.get("session_id", ""),
+                _time.perf_counter() - t_route,
+            )
+
         # Update state
         state["intent"] = result.intent
         state["sub_intent"] = getattr(result, "sub_intent", "general")
         state["implicit_viz_hint"] = getattr(result, "implicit_viz_hint", False)
+        state["is_follow_up"] = bool(getattr(result, "is_follow_up", False))
         state["entities"] = {
             "mentioned_columns": result.mentioned_columns,
             "operations": result.operations

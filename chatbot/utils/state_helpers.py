@@ -1,6 +1,21 @@
 """Shared helpers for reading from graph state. Keeps node code DRY and intent clear."""
 
-from typing import Dict, Any
+from typing import Any, Dict, List
+
+
+def get_tool_calls(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return ``state[\"tool_calls\"]`` as a list.
+
+    LangGraph merges thread inputs where ``tool_calls`` is explicitly ``None``;
+    ``dict.get(\"tool_calls\", [])`` then returns ``None`` (key present), which
+    breaks ``for tc in tool_calls``. Always normalize here.
+    """
+    raw = state.get("tool_calls")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return raw
 
 
 def get_current_query(state: Dict[str, Any]) -> str:
